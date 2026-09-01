@@ -1,8 +1,9 @@
 import java.io.File
 
 plugins {
+    // AGP 9.x 已内置 Kotlin 支持，不能再显式应用 org.jetbrains.kotlin.android，
+    // 否则 Gradle 配置阶段报 "Remove the 'org.jetbrains.kotlin.android' plugin"。
     id("com.android.application") version "9.3.2"
-    id("org.jetbrains.kotlin.android") version "2.4.10"
     id("org.jetbrains.kotlin.plugin.compose") version "2.4.10"
 }
 

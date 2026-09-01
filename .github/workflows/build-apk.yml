@@ -22,10 +22,8 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
-      # GitHub 托管的 runner 已预装 Android SDK，无需额外安装。
-      - name: Generate Gradle wrapper
-        run: gradle wrapper --gradle-version 8.13
-
+      # GitHub 托管 runner 已预装 Android SDK；setup-gradle 已提供与 AGP 9.x 匹配的
+      # Gradle 9.x 并在 PATH 上，直接用 gradle 构建，避免现场生成 8.13 wrapper 造成版本错配。
       # 注意：secrets 上下文不能出现在 step 的 if: 里（会导致整个 workflow 解析失败）。
       # 因此在 shell 内部判断密钥是否存在；无密钥时跳过，release 回退到 debug 签名。
       - name: Decode signing key
@@ -45,7 +43,7 @@ jobs:
           KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: ./gradlew :app:assembleRelease
+        run: gradle :app:assembleRelease --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v7
