@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MIUIX 套壳布局预览</title>
+<style>
+  :root {
+    --bg: #f5f6f8;
+    --card: #ffffff;
+    --line: #e4e7ec;
+    --primary: #2f6feb;
+    --on-primary: #ffffff;
+    --text: #1f2937;
+    --text-2: #6b7280;
+    --surface-container: #eceef2;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #dfe3ea;
+    color: var(--text);
+    display: flex;
+    justify-content: center;
+    padding: 24px;
+  }
+  /* 手机外框 */
+  .phone {
+    width: 390px;
+    height: 780px;
+    background: var(--bg);
+    border-radius: 38px;
+    border: 10px solid #1c1f26;
+    overflow: hidden;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 20px 60px rgba(0,0,0,.25);
+  }
+  header {
+    background: var(--primary);
+    color: #fff;
+    padding: 16px 18px;
+    font-size: 18px;
+    font-weight: 600;
+  }
+  .scroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    display: grid;
+    gap: 16px;
+    padding-bottom: 110px; /* 给底栏留位 */
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 14px 16px;
+  }
+  .card h2 { margin: 0 0 8px; font-size: 15px; }
+  .muted { color: var(--text-2); font-size: 13px; }
+  .small-title { font-size: 13px; font-weight: 600; color: var(--text-2); margin: 4px 2px; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .row + .row { margin-top: 14px; }
+
+  /* 开关 */
+  .switch { position: relative; width: 46px; height: 28px; }
+  .switch input { display: none; }
+  .track {
+    position: absolute; inset: 0; background: #d1d5db; border-radius: 999px;
+    transition: background .2s;
+  }
+  .thumb {
+    position: absolute; top: 3px; left: 3px; width: 22px; height: 22px;
+    background: #fff; border-radius: 50%; transition: left .2s; box-shadow: 0 1px 3px rgba(0,0,0,.3);
+  }
+  .switch input:checked + .track { background: var(--primary); }
+  .switch input:checked + .track + .thumb { left: 21px; }
+
+  /* 滑块 */
+  input[type=range] { width: 100%; accent-color: var(--primary); }
+
+  /* 液态玻璃按钮 */
+  .liquid-btn {
+    margin-top: 6px;
+    width: 100%;
+    padding: 12px 24px;
+    border: 1px solid rgba(255,255,255,.5);
+    border-radius: 999px;
+    background: rgba(47,111,235,.5);
+    backdrop-filter: blur(18px) saturate(140%);
+    -webkit-backdrop-filter: blur(18px) saturate(140%);
+    color: var(--on-primary);
+    font-size: 15px; font-weight: 600;
+    cursor: pointer;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.4), 0 4px 14px rgba(47,111,235,.25);
+  }
+
+  /* 列表项 */
+  .list-item h3 { margin: 0 0 4px; font-size: 14px; }
+  .list-item p { margin: 0; }
+
+  /* 悬浮液态玻璃底栏 */
+  .nav {
+    position: absolute;
+    left: 16px; right: 16px; bottom: 16px;
+    height: 64px;
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    border-radius: 999px;
+    background: rgba(236,238,242,.55);
+    backdrop-filter: blur(25px) saturate(160%);
+    -webkit-backdrop-filter: blur(25px) saturate(160%);
+    border: 1px solid rgba(255,255,255,.6);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.5), 0 8px 24px rgba(0,0,0,.18);
+  }
+  .nav .item {
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    font-size: 11px; color: var(--text-2); cursor: pointer; flex: 1;
+    padding: 6px 0; border-radius: 14px;
+  }
+  .nav .item .ico { font-size: 20px; }
+  .nav .item.active { color: var(--primary); font-weight: 600; }
+  .nav .item.active .ico {
+    background: rgba(47,111,235,.12);
+    padding: 4px; border-radius: 12px;
+  }
+</style>
+</head>
+<body>
+  <div class="phone">
+    <header>MIUIX 液态玻璃套壳</header>
+    <div class="scroll">
+      <div class="card">
+        <h2>MIUIX 液态玻璃套壳</h2>
+        <div class="muted">向下滚动，底栏与按钮的玻璃会实时折射背后的内容（预览为静态模拟）。</div>
+      </div>
+
+      <div class="small-title">通用</div>
+      <div class="card">
+        <div class="row">
+          <span>深色模式</span>
+          <label class="switch">
+            <input type="checkbox" checked />
+            <span class="track"></span><span class="thumb"></span>
+          </label>
+        </div>
+        <div class="row" style="display:block">
+          <div class="row"><span>进度</span><span class="muted" id="pv">50%</span></div>
+          <input type="range" min="0" max="100" value="50" oninput="document.getElementById('pv').textContent=this.value+'%'" />
+        </div>
+        <button class="liquid-btn">液态按钮</button>
+      </div>
+
+      <!-- 列表项占位 -->
+      <div class="card list-item"><h3>列表项 #0</h3><p class="muted">这里是你的页面内容，替换成自己的 Composable 即可。</p></div>
+      <div class="card list-item"><h3>列表项 #1</h3><p class="muted">这里是你的页面内容，替换成自己的 Composable 即可。</p></div>
+      <div class="card list-item"><h3>列表项 #2</h3><p class="muted">这里是你的页面内容，替换成自己的 Composable 即可。</p></div>
+      <div class="card list-item"><h3>列表项 #3</h3><p class="muted">这里是你的页面内容，替换成自己的 Composable 即可。</p></div>
+      <div class="card list-item"><h3>列表项 #4</h3><p class="muted">这里是你的页面内容，替换成自己的 Composable 即可。</p></div>
+    </div>
+
+    <nav class="nav">
+      <div class="item active" onclick="setActive(this)"><span class="ico">🏠</span>首页</div>
+      <div class="item" onclick="setActive(this)"><span class="ico">🖼️</span>图片</div>
+      <div class="item" onclick="setActive(this)"><span class="ico">⚙️</span>设置</div>
+    </nav>
+  </div>
+
+  <script>
+    function setActive(el) {
+      document.querySelectorAll('.nav .item').forEach(i => i.classList.remove('active'));
+      el.classList.add('active');
+    }
+  </script>
+</body>
+</html>
