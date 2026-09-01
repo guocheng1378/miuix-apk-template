@@ -13,7 +13,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -52,10 +51,9 @@ import top.yukonga.miuix.kmp.basic.SnackbarResult
 import top.yukonga.miuix.kmp.preference.RadioButtonPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.squircle.squircleSurface
-import io.coil.compose.SubcomposeAsyncImage
+import coil3.compose.SubcomposeAsyncImage
 import ui.KeyColors
 import ui.keyColorFor
-import androidx.compose.foundation.layout.matchParentSize
 import top.yukonga.miuix.kmp.blur.BlendColorEntry
 import top.yukonga.miuix.kmp.blur.BlurDefaults
 import top.yukonga.miuix.kmp.blur.LayerBackdrop
@@ -71,12 +69,11 @@ import top.yukonga.miuix.kmp.nav.core.NavDisplay
 import top.yukonga.miuix.kmp.nav.core.rememberNavController
 import top.yukonga.miuix.kmp.theme.ColorSchemeMode
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import androidx.compose.foundation.Icon
+import top.yukonga.miuix.kmp.basic.Icon
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.offset
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.unit.IntOffset
@@ -316,7 +313,7 @@ fun HomePage(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .nestedScroll(scrollBehavior.nestedScroll.connection)
+                
                 .verticalScroll(rememberScrollState())
                 .overScrollVertical()
                 .then(backdrop?.let { Modifier.layerBackdrop(it) } ?: Modifier)
@@ -478,7 +475,7 @@ fun ImagePage(backdrop: LayerBackdrop?, onOpenDetail: (Int) -> Unit, scrollBehav
             SmallTitle(text = "图片（Coil 网络图）")
             LazyVerticalGrid(
                 columns = GridCells.Fixed(2),
-                modifier = Modifier.fillMaxWidth().weight(1f).nestedScroll(scrollBehavior.nestedScroll.connection),
+                modifier = Modifier.fillMaxWidth().weight(1f),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
@@ -536,7 +533,7 @@ fun SettingsPage(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .nestedScroll(scrollBehavior.nestedScroll.connection)
+            
             .verticalScroll(rememberScrollState())
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -601,7 +598,7 @@ fun DetailPage(id: Int, onBack: () -> Unit, backdrop: LayerBackdrop?, scrollBeha
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .nestedScroll(scrollBehavior.nestedScroll.connection)
+            
             .verticalScroll(rememberScrollState())
             .then(backdrop?.let { Modifier.layerBackdrop(it) } ?: Modifier)
             .padding(16.dp),
