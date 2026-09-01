@@ -15,12 +15,13 @@ dependencies {
 
 android {
     namespace = "top.yukonga.miuixapptemplate"
-    compileSdk = 35
+    // miuix 0.9.4-rc01 AAR 要求 compileSdk >= 37
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "top.yukonga.miuixapptemplate"
         minSdk = 24
-        targetSdk = 35
+        targetSdk = 37
         versionCode = 1
         versionName = "1.0.0"
     }
