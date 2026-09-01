@@ -26,11 +26,18 @@ jobs:
       - name: Generate Gradle wrapper
         run: gradle wrapper --gradle-version 8.13
 
+      # 注意：secrets 上下文不能出现在 step 的 if: 里（会导致整个 workflow 解析失败）。
+      # 因此在 shell 内部判断密钥是否存在；无密钥时跳过，release 回退到 debug 签名。
       - name: Decode signing key
-        if: ${{ secrets.SIGNING_KEY != '' }}
         env:
           SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
-        run: echo "$SIGNING_KEY" | base64 -d > "$GITHUB_WORKSPACE/keystore.jks"
+        run: |
+          if [ -n "$SIGNING_KEY" ]; then
+            echo "$SIGNING_KEY" | base64 -d > "$GITHUB_WORKSPACE/keystore.jks"
+            echo "已写入 keystore.jks"
+          else
+            echo "未配置 SIGNING_KEY，跳过签名，release 将使用 debug 签名"
+          fi
 
       - name: Build release APK
         env:
