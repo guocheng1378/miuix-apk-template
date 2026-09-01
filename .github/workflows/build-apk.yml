@@ -25,7 +25,7 @@ jobs:
       # GitHub 托管 runner 已预装 Android SDK；setup-gradle 已提供与 AGP 9.x 匹配的
       # Gradle 9.x 并在 PATH 上，直接用 gradle 构建，避免现场生成 8.13 wrapper 造成版本错配。
       # 注意：secrets 上下文不能出现在 step 的 if: 里（会导致整个 workflow 解析失败）。
-      # 因此在 shell 内部判断密钥是否存在；无密钥时跳过，release 回退到 debug 签名。
+      # 因此在 shell 内部判断密钥是否存在；无密钥时跳过，release 产物为未签名 APK。
       - name: Decode signing key
         env:
           SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
@@ -34,7 +34,7 @@ jobs:
             echo "$SIGNING_KEY" | base64 -d > "$GITHUB_WORKSPACE/keystore.jks"
             echo "已写入 keystore.jks"
           else
-            echo "未配置 SIGNING_KEY，跳过签名，release 将使用 debug 签名"
+            echo "未配置 SIGNING_KEY，跳过签名，产物为 app-release-unsigned.apk"
           fi
 
       - name: Build release APK

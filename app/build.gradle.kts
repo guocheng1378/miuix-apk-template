@@ -32,7 +32,7 @@ android {
     }
 
     // 仅在提供了签名密钥（CI Secrets 或本地 local.properties）时才配置签名。
-    // 未提供时，release 会回退到 AGP 自带的 debug 签名，仍能产出可安装的 APK。
+    // 未提供时 release 不做签名，产物为 app-release-unsigned.apk（需自行 zipalign + apksigner 才能安装/上架）。
     val localProps = Properties().apply {
         val lp = rootProject.file("local.properties")
         if (lp.exists()) lp.inputStream().use { load(it) }
