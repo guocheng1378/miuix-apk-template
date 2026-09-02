@@ -154,17 +154,20 @@ base64 -w0 release.keystore
 
 | tag | versionName / versionCode | Release 资产 | 状态 |
 |---|---|---|---|
+| [`v1.0.4`](https://github.com/guocheng1378/miuix-apk-template/releases/tag/v1.0.4) | `1.0.4`（versionCode 由 CI 运行号自增） | `app-release.apk`（9322638 字节 ≈ 8.89 MB） | **已签名，首帧崩溃已修（见[测试与验证现状](#测试与验证现状)），可直接下载安装** |
 | [`v1.0.3`](https://github.com/guocheng1378/miuix-apk-template/releases/tag/v1.0.3) | `1.0.3` / `3` | `app-release.apk` | ⚠️ **已被取代**：APK 在模拟器上首帧 SIGSEGV 崩溃（RenderNode 环，见[测试与验证现状](#测试与验证现状)）。请勿安装，直接用 `v1.0.4` |
 | [`v1.0.2`](https://github.com/guocheng1378/miuix-apk-template/releases/tag/v1.0.2) | `1.0.2` / `2` | `app-release.apk`（9306061 字节 ≈ 8.87 MB） | **已签名，可直接下载安装** |
 | `v1.0.1` | — | 无 APK 资产（只有 source zip/tar.gz） | 签名链路启用前的构建 |
 
-下载：`https://github.com/guocheng1378/miuix-apk-template/releases/download/v1.0.2/app-release.apk`
+下载：`https://github.com/guocheng1378/miuix-apk-template/releases/download/v1.0.4/app-release.apk`
 
-`v1.0.2` 的签名与完整性（CI `apksigner verify --print-certs` 与 Release 页两处一致）：
+`v1.0.4` 的完整性（CI 构建产物，签名走与 `v1.0.2` 相同的 keystore，故证书指纹一致）：
 
 - 签名方案：**APK Signature Scheme v2**，RSA 2048，单签名者（自签证书）
-- **APK SHA-256**：`ba6ae10d3d8e1136910e7957a76777aa1325749f8530a72538b766bae45d77e5`
-- **证书 SHA-256**：`445a46ddcad6465947735503f6d80f2b556337ff5bd6a67470f378e1092195c7`
+- **APK SHA-256**：`652c1d4a62e224fe0e6ff34d081860e89c6f6cae45aeb3d2f55cd656deef24aa`
+- **证书 SHA-256**：`445a46ddcad6465947735503f6d80f2b556337ff5bd6a67470f378e1092195c7`（与 v1.0.2 相同，未换密钥）
+
+> 换自己的密钥后这两个指纹都会变，别拿本仓库的值去校验 fork 的产物。
 
 拿到 APK 后自行核对：
 
