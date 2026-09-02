@@ -33,6 +33,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import component.liquid.IosLiquidGlassNavigationBar
@@ -142,6 +143,11 @@ fun App(prefs: AppPrefs) {
         }
         val isTopTab = selectedTab >= 0
 
+        // 整个导航栈共用一个 ScrollBehavior：TopAppBar 只此一个，栈顶页面决定标题。
+        // 注意 miuix Scaffold 不接管滚动——每页必须自己接线：有下拉刷新的页面包
+        // PullToRefresh(topAppBarScrollBehavior = ...)，没有的在滚动容器上写
+        // Modifier.nestedScroll(scrollBehavior.nestedScrollConnection)。一个页面只用其中
+        // 一条路，别两条都接（重复接线会让同一段滚动被两条 connection 分别处理）。
         val scrollBehavior = MiuixScrollBehavior()
         val topTitle by remember(nav) {
             derivedStateOf {
@@ -550,7 +556,9 @@ fun SettingsPage(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            
+            // 本页不套 PullToRefresh，必须自己把 ScrollBehavior 的 connection 接到滚动容器上，
+            // 否则大标题折叠收不到任何滚动事件（miuix Scaffold 不接管滚动，见 README「滚动接线」）。
+            .nestedScroll(scrollBehavior.nestedScrollConnection)
             .verticalScroll(rememberScrollState())
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -619,6 +627,9 @@ fun DetailPage(id: Int, onBack: () -> Unit, buttonBackdrop: LayerBackdrop?, scro
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                // 本页不套 PullToRefresh，滚动事件要靠这条 connection 送到 TopAppBar，
+                // 否则大标题折叠不生效（miuix Scaffold 不接管滚动）。
+                .nestedScroll(scrollBehavior.nestedScrollConnection)
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -636,6 +647,17 @@ fun DetailPage(id: Int, onBack: () -> Unit, buttonBackdrop: LayerBackdrop?, scro
                 Column(Modifier.padding(16.dp)) {
                     Text("详情 #$id")
                     Text("这是 miuix-nav push 进来的页面：自带返回转场、边缘/系统返回手势，返回后列表状态保留。")
+                }
+            }
+            // 折叠说明：原有内容不足一屏，Column 根本滚不起来，接了 connection 也看不到效果，
+            // 所以这里补一段真正需要滚动的内容，同时把接线规则写进模板本身。
+            SmallTitle(text = "大标题折叠怎么接上的")
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("miuix 的 Scaffold 只负责排布槽位并给出 innerPadding，不参与滚动接线：它的形参里没有 ScrollBehavior。")
+                    Text("全库只有 TopAppBar 和 PullToRefresh 接受 ScrollBehavior。PullToRefresh 内部会把自己的 connection 挂在容器上，再转发给 topAppBarScrollBehavior。")
+                    Text("本页没有下拉刷新语义，因此直接在滚动 Column 上写 Modifier.nestedScroll(scrollBehavior.nestedScrollConnection)。")
+                    Text("已经包在 PullToRefresh 里的页面（首页、图片页）不要再重复接一次，一条页面只走一条接线路径。")
                 }
             }
             LiquidButton(

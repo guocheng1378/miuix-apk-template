@@ -18,7 +18,8 @@
 - **悬浮液态玻璃底栏**：`miuix-blur` 的 `LayerBackdrop` / `textureBlur` / `Highlight` + 设备倾斜传感器（`rememberDeviceTilt`）组合成 `IosLiquidGlassNavigationBar`，实时折射背后画面；不支持 `RuntimeShader` 的设备自动降级为纯色底栏。
 - **miuix-nav 页面栈**：三个顶层 tab（首页 / 图片 / 设置）+ 带参详情页 `Route.Detail(id)`，支持 push/pop/replace、边缘滑动返回、系统预测性返回手势、返回栈跨配置变更保存。
 - **主题**：深/浅色与强调色切换（`ThemeController`），偏好经 `SharedPreferences` 持久化，重启保留。
-- **首页**：大标题折叠 TopAppBar、下拉刷新、左滑删除 + Snackbar 撤销、`OverlayBottomSheet` 底部弹层、FAB。
+- **大标题折叠 TopAppBar**：全栈共用一个 `MiuixScrollBehavior`，四页（首页 / 图片 / 设置 / 详情）都已接线，每页自己接（见[滚动接线](#滚动接线大标题折叠)）。
+- **首页**：下拉刷新、左滑删除 + Snackbar 撤销、`OverlayBottomSheet` 底部弹层、FAB。
 - **图片页**：`LazyVerticalGrid` + Coil 3 `SubcomposeAsyncImage`，带加载中/失败占位，点击进详情页回显该图。
 - **设置页**：`miuix-preference` 的 `RadioButtonPreference`（主题/主题色）+ `SwitchPreference`（通知）。
 - **edge-to-edge**、squircle 连续圆角降级、自定义启动图标。
@@ -232,6 +233,7 @@ miuix 的 `miuix-squircle`（`Card` / `squircleSurface`）与 `miuix-blur`（液
 ### 仍未执行
 
 - **真机逐页手感**：手势返回、下拉刷新手感、左滑删除阈值、液态玻璃在真机的实际观感，仍没有人工/自动化记录（开发环境只有 CI 模拟器，没有真机）。
+- **设置页 / 详情页的大标题折叠接线**：`App.kt` 里这两页补上的 `.nestedScroll(scrollBehavior.nestedScrollConnection)`（以及详情页为保证可滚补的说明卡）**尚未经过编译与截图验证**——本仓库的开发环境没有 JDK / Android SDK / Gradle，改动只做了源码级核对（API 名与形参照着 miuix `0.9.4-rc01` sources jar 逐条确认）。下一次 CI 跑绿之前，这条算"已改未验"。
 - **GitHub 报的 47 个依赖漏洞**：全部是 Gradle 插件 / Robolectric 等**构建与测试期**传递依赖（netty、bouncycastle、jose4j 等），**不进 Release APK**（已解包核对：APK 只含 okhttp / coil / miuix / compose 等运行时依赖）。升级需动 Gradle / Kotlin / AGP 版本，会冲掉整套已验证版本矩阵，暂不动。
 
 ## 限制与未验证项
@@ -272,29 +274,35 @@ miuix 的 `miuix-squircle`（`Card` / `squircleSurface`）与 `miuix-blur`（液
 
 ```kotlin
 val nav = rememberNavController<Route>(Route.Home)
+val scrollBehavior = MiuixScrollBehavior()   // 全栈共用一个，TopAppBar 只此一个
 
-Scaffold(bottomBar = { ... }) { innerPadding ->
-    NavDisplay(
-        navController = nav,
-        modifier = Modifier.fillMaxSize().padding(innerPadding),
-    ) {
-        entry<Route.Home> { HomePage(backdrop, snackbarHost, onOpenDetail = { nav.push(Route.Detail(it)) }) }
-        entry<Route.Image> { ImagePage(backdrop, onOpenDetail = { nav.push(Route.Detail(it)) }) }
-        entry<Route.Settings> { SettingsPage(themeMode) { themeMode = it } }
-        entry<Route.Detail> { DetailPage(it.id, onBack = { nav.pop() }, backdrop = backdrop) }
+Scaffold(
+    topBar = { TopAppBar(title = topTitle, largeTitle = topLargeTitle, scrollBehavior = scrollBehavior) },
+    bottomBar = { ... },
+) { innerPadding ->
+    Box(Modifier.fillMaxSize().padding(innerPadding)) {
+        NavDisplay(navController = nav, modifier = Modifier.fillMaxSize()) {
+            // 首页 / 图片页：包 PullToRefresh 并把 scrollBehavior 交给它转发
+            entry<Route.Home> { HomePage(..., scrollBehavior = scrollBehavior) }
+            entry<Route.Image> { ImagePage(onOpenDetail = { nav.push(Route.Detail(it)) }, scrollBehavior = scrollBehavior) }
+            // 设置页 / 详情页：没有 PullToRefresh，页面自己在滚动容器上接 nestedScroll
+            entry<Route.Settings> { SettingsPage(..., scrollBehavior = scrollBehavior) }
+            entry<Route.Detail> { DetailPage(it.id, onBack = { nav.pop() }, ..., scrollBehavior = scrollBehavior) }
+        }
     }
 }
 ```
 
 - 详情页 push 时 bottomBar 和 FAB 自动隐藏，全屏展示；
 - 点击底部 tab 用 `nav.replace()` 切换（清空详情栈）；
-- 系统返回键 / 边缘滑动返回调用 `nav.pop()`。
+- 系统返回键 / 边缘滑动返回调用 `nav.pop()`；
+- `scrollBehavior` 必须一路传到每个页面，否则那一页的大标题不折叠（见[滚动接线](#滚动接线大标题折叠)）。
 
 ## UI 特性（均可在 `App.kt` 增删）
 
 | 特性 | 实现 | 位置 |
 |---|---|---|
-| 大标题折叠 TopAppBar | 顶层 `MiuixScrollBehavior()` 传给各页 miuix 组件的 `topAppBarScrollBehavior`，栈顶决定标题/大标题；miuix `Scaffold` 内部已接管滚动，**不要**手写 `.nestedScroll(...)` | `App()` |
+| 大标题折叠 TopAppBar | 顶层 `MiuixScrollBehavior()` 一个实例喂给全栈，栈顶决定标题/大标题；**每页自己接线**：首页/图片页走 `PullToRefresh(topAppBarScrollBehavior = ...)`，设置页/详情页在滚动容器上写 `.nestedScroll(scrollBehavior.nestedScrollConnection)`（miuix `Scaffold` 不接管滚动，见[滚动接线](#滚动接线大标题折叠)） | `App()` / `SettingsPage()` / `DetailPage()` |
 | 主题持久化 | `AppPrefs` 接口 + Android `SharedPreferences` 实现，主题/主题色/通知**重启保留** | `AppPrefs.kt` / `AndroidAppPrefs.kt` / `App()` |
 | 下拉刷新 | `PullToRefresh` + `rememberPullToRefreshState`，模拟 800ms 后复位（首页 + 图片页） | `HomePage()` / `ImagePage()` |
 | 左滑删除 + 撤销 | 自写 `SwipeToDeleteItem`（foundation `draggable`），左滑露出红色删除区，删除后 `Snackbar` 可撤销 | `HomePage()` / `SwipeToDeleteItem()` |
@@ -305,6 +313,36 @@ Scaffold(bottomBar = { ... }) { innerPadding ->
 | edge-to-edge | `MainActivity.enableEdgeToEdge()`，内容延伸到状态栏/导航栏之下 | `MainActivity.kt` |
 
 > 图片页需要网络权限和 Coil 依赖，模板已配好：`AndroidManifest.xml` 加了 `INTERNET` 权限；`shared/build.gradle.kts` 的 commonMain 加了 `coil-compose`，androidMain 加了 `coil-network-okhttp`（Coil 3 的 OkHttp 网络变体只在 Android/JVM 平台有）。
+
+### 滚动接线（大标题折叠）
+
+`TopAppBar(largeTitle = ..., scrollBehavior = ...)` 的大标题折叠**不是自动生效的**，它只读 `ScrollBehavior.state`，而 state 要靠有人把滚动事件喂进来。miuix `0.9.4-rc01` 的事实（逐条在官方 sources jar 里核过）：
+
+- **`Scaffold` 不接管滚动**：`basic/Scaffold.kt:79` 的形参里没有任何 `ScrollBehavior`，它只做槽位排布并给出 `innerPadding`。指望"把 `scrollBehavior` 传给 `Scaffold`"是接不上的——它没有这个参数。
+- **全库只有两个组件接受 `ScrollBehavior`**：`TopAppBar`（`basic/TopAppBar.kt:111`）和 `PullToRefresh`（`basic/PullToRefresh.kt:131`，形参名 `topAppBarScrollBehavior`）。grep 整个 sources jar，`ScrollBehavior` 也只出现在这两个文件里。
+- **属性名是 `nestedScrollConnection`**：`interface ScrollBehavior`（`basic/TopAppBar.kt:422-454`）的成员是 `state` / `isPinned` / `snapAnimationSpec` / `flingAnimationSpec` / `nestedScrollConnection`。源码自己的注释就写着"A [NestedScrollConnection] that should be attached to a [Modifier.nestedScroll]"（`basic/TopAppBar.kt:451`）。**没有** `nestedScroll` 这层中间对象，`scrollBehavior.nestedScroll.connection` 是编不过的。
+
+所以模板里两条路二选一，**每个页面各选一条**——同一页两条都写属于冗余接线：Compose 的 pre-scroll 按"由内向外"分发，内层那条 connection 会先吃掉向上滚动的量，外层 `PullToRefresh` 的连接只剩残余，行为取决于分发顺序而不是你的意图。（这条分发顺序是 Compose `NestedScrollDispatcher` 的既有语义，本仓库没有实测过双接的具体表现，只作为"别这么写"的理由，不作为现象描述。）
+
+| 页面 | 接线方式 | 位置 |
+|---|---|---|
+| 首页 / 图片页 | 包 `PullToRefresh(topAppBarScrollBehavior = scrollBehavior)`，它内部 `Modifier.nestedScroll(...)` 并转发给 app bar（`basic/PullToRefresh.kt:222`、`:638-706`） | `HomePage()` / `ImagePage()` |
+| 设置页 / 详情页 | 无下拉刷新语义，直接在滚动容器上 `.nestedScroll(scrollBehavior.nestedScrollConnection)` | `SettingsPage()` / `DetailPage()` |
+
+```kotlin
+// 没有 PullToRefresh 的页面必须自己接这一行，否则大标题纹丝不动
+Column(
+    modifier = Modifier
+        .fillMaxSize()
+        .nestedScroll(scrollBehavior.nestedScrollConnection)   // 注意属性名，不是 .nestedScroll.connection
+        .verticalScroll(rememberScrollState())
+        .padding(16.dp),
+) { ... }
+```
+
+> 还有一个容易误判成"接线没生效"的条件：**内容必须高过一屏**。`Scaffold` 的 `innerPadding` 用的是 app bar 当前（展开态）高度，所以可滚区域比屏幕矮一截；页面本身撑不满时就根本没有滚动可分发，折叠自然看不到。模板的详情页因此保留了一段说明卡来保证可滚。
+>
+> 历史 bug：`SettingsPage` / `DetailPage` 一度只声明了 `scrollBehavior` 形参、body 里从没用它，折叠静默失效——形参没被使用在 Kotlin 里不是编译错误，只能靠肉眼或 lint 抓。
 
 ## 常见问题
 
@@ -324,4 +362,4 @@ Scaffold(bottomBar = { ... }) { innerPadding ->
 - **作用域成员不要顶层 import**：`androidx.compose.foundation.layout.weight`、`androidx.compose.foundation.layout.matchParentSize` 这类是作用域内成员，import 了反而编译失败，删掉 import、靠接收者作用域解析。
 - **Coil 3 组件在 `coil3.compose.*`**：如 `import coil3.compose.SubcomposeAsyncImage`，不是 `androidx.compose.*`。
 - **`Icon` 用 miuix 的**：`import top.yukonga.miuix.kmp.basic.Icon`，不是 `androidx.compose.foundation.Icon`。
-- **不要手写 nestedScroll**：miuix 的 `ScrollBehavior` 没有暴露 `nestedScroll.connection`，`.nestedScroll(scrollBehavior.nestedScroll.connection)` 会编译失败——miuix `Scaffold` 内部已接管滚动，把 `scrollBehavior` 传给 `topAppBarScrollBehavior` 即可。
+- **`nestedScroll` 要写对属性名**：miuix 的 `ScrollBehavior` 暴露的是 `nestedScrollConnection`（`basic/TopAppBar.kt:454`），**没有** `nestedScroll` 这个中间对象——`.nestedScroll(scrollBehavior.nestedScroll.connection)` 会编译失败，正确写法是 `.nestedScroll(scrollBehavior.nestedScrollConnection)`。miuix `Scaffold` 的形参里根本没有 `ScrollBehavior`（`basic/Scaffold.kt:79`），它只排布槽位、给 `innerPadding`，**不接管滚动**，所以每页必须自己接线，见[滚动接线](#滚动接线大标题折叠)。
