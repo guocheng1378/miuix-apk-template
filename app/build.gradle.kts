@@ -22,8 +22,8 @@ android {
         applicationId = "top.yukonga.miuixapptemplate"
         minSdk = 24
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.0.2"
     }
 
     compileOptions {
@@ -46,6 +46,9 @@ android {
         signingConfigs {
             create("release") {
                 storeFile = keystoreFile
+                // 密钥库由 openssl pkcs12 -export 生成（无需 JDK），必须显式声明类型，
+                // 否则 AGP 默认按 JKS 读取会失败。
+                storeType = "PKCS12"
                 storePassword = signingProp("KEYSTORE_PASS")
                 keyAlias = signingProp("KEY_ALIAS")
                 keyPassword = signingProp("KEY_PASSWORD")

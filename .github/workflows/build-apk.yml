@@ -31,19 +31,32 @@ jobs:
           SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
         run: |
           if [ -n "$SIGNING_KEY" ]; then
-            echo "$SIGNING_KEY" | base64 -d > "$GITHUB_WORKSPACE/keystore.jks"
-            echo "已写入 keystore.jks"
+            echo "$SIGNING_KEY" | base64 -d > "$GITHUB_WORKSPACE/keystore.p12"
+            echo "已写入 keystore.p12（PKCS12）"
           else
             echo "未配置 SIGNING_KEY，跳过签名，产物为 app-release-unsigned.apk"
           fi
 
       - name: Build release APK
         env:
-          KEYSTORE_PATH: ${{ github.workspace }}/keystore.jks
+          KEYSTORE_PATH: ${{ github.workspace }}/keystore.p12
           KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: gradle :app:assembleRelease --no-daemon
+
+      # 签名没生效就直接让 CI 失败，避免把装不上的 unsigned 包发到 Release 页上。
+      - name: Verify APK signature
+        run: |
+          APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          echo "产物: $APK"
+          case "$APK" in
+            *unsigned*) echo "!! 产物未签名，签名 Secrets 未生效"; exit 1;;
+          esac
+          AS=$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)
+          [ -n "$AS" ] || AS=$(find /usr/local/lib/android/sdk -name apksigner -type f 2>/dev/null | sort -V | tail -1)
+          [ -n "$AS" ] || { echo "找不到 apksigner"; exit 1; }
+          "$AS" verify --verbose --print-certs "$APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v7

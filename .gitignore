@@ -5,7 +5,9 @@ build/
 local.properties
 *.jks
 *.keystore
+*.p12
 keystore.jks
+keystore.p12
 
 # IDE
 .idea/
