@@ -44,6 +44,8 @@
 | Release 页上的 APK 装不上 | 未配 Secrets 时产物是 `app-release-unsigned.apk`，不是 debug 签名的可安装包。加 Verify 步骤：文件名含 `unsigned` 就 `exit 1`，再 `apksigner verify` |
 | keystore 疑似泄露 | public 仓库里把 keystore 当 artifact 上传 = 任何持 token 者可下载。只走 Secrets |
 | `api.github.com` 突然 403 | 匿名配额 60/小时打满（`x-ratelimit-remaining: 0`）。改用 `raw.githubusercontent.com` 取文件、抓 HTML 里的 JSON 字段 |
+| smoke job 红但 build 全绿、app 进程存活 | 先别改代码，按 J 节定性（冷 AVD dexopt 假红见 J1，对照实验法见 `references/verification.md`） |
+| Dependency Review 报 `The Dependency graph is disabled for this repository` | private 仓库未授权 Advanced Security，与代码无关，见 J2 |
 
 ## D. 签名
 
@@ -284,4 +286,98 @@ JVM 截图回归能跑——把它们放进 emulator 冒烟，或干脆不写 `@
 **核对方法**：改完滚动相关代码后，光看编译过不算数——必须在 emulator/真机上把列表滚到底，
 确认大标题真的折叠、回滚到顶真的展开。这条没有静态检查能兜（`preflight.sh` 只能查接线
 语法是否存在，查不出它是否真的被调用），与 G1 同属「只有跑起来才知道」那一类。
+
+## J. CI 判红但未必是缺陷：三类环境性假红（2026-09-02 端到端派生实测）
+
+背景：脚手架派生 `com.demostudio.reader` 工程 → 推到新建 private 仓库
+`guocheng1378/miuix-derived-smoke` → 配齐 4 条签名 Secrets → 打 tag `v0.1.0`。
+结果 build job 19 步全绿（`Decode signing key` → `Build Release APK` →
+`Verify APK signature` → `Upload APK` → `Create GitHub Release`，Release 资产
+`app-release.apk` 实测 9322626 bytes、sha256
+`80b3696462b3826b5cb85fe32fd78665f4bb0364f294ccb870f3743ef7911612`），
+但 smoke 与 Dependency Review 两个 job 红、Screenshot Regression 绿（它走 JVM/Robolectric
+渲染，与模拟器是两条独立路径）。下面三条是对两个红 job 的定性——**全部不是派生缺陷**。
+定性的通用手段（模板仓库对照实验）与各 job 判读优先级见 `references/verification.md`
+「端到端派生验证」。
+
+### J1. 冷 AVD 首启的 dexopt 会让模拟器冒烟假红，派生仓库必然踩
+
+**症状**：smoke job 红，logcat 里有
+
+```
+W InputDispatcher: ... spent 6368ms processing FocusEvent(hasFocus=true)
+E ActivityManager: ANR in Window{...}（5003ms 输入分发超时）
+```
+
+看着像 app 卡死，但**这是输入分发超时 ANR，不是崩溃**：`adb logcat -b crash` 里只有
+`com.google.android.gm` 的无关异常，本 app 进程存活（`pidof <包名>` 有值）、
+`dumpsys activity` 的 `topResumedActivity` 就是自己的 `MainActivity`。
+
+**对照实证**（同一份代码，模板与派生各跑一次）：
+
+| | 模板仓库绿 run | 派生仓库红 run |
+|---|---|---|
+| AVD 快照缓存 | 命中 | 未命中（现场新建 AVD） |
+| `am start -W` | `TotalTime: 4705` | `TotalTime: 7653` |
+| logcat dexopt | — | `Dexopt result ... actualCompilerFilter=verify, dex2oatWallTimeMillis=7387` |
+| 冒烟结论 | 通过 | ANR 判红 |
+
+**机制**：新建 AVD 上首次安装启动，ART 只做 verify 不做 AOT
+（`actualCompilerFilter=verify`），主线程被解释执行拖住，冷启 7.6 秒超过 5 秒的输入分发
+阈值 → 系统记 ANR → 冒烟正则 `ANR in ` 命中。缓存命中时镜像早已对包做过 AOT，同样的
+启动 4.7 秒就过了。派生仓库是新仓库、AVD 缓存 key 必然未命中，所以**首跑几乎必踩**。
+
+**判据（记牢）**：冒烟红 + 进程存活 + crash buffer 干净 + `TotalTime` 明显偏高
+→ **排查方向是看 AVD 缓存是否命中**（看 `actions/cache/restore` 步骤输出），
+而不是怀疑派生改坏了代码。
+
+**修复（已落地在 workflow 侧）**：安装后先
+`adb shell cmd package compile -m speed -f <包名>` 强制 AOT，再做一次抛弃式预热启动
+（`|| true`，成败不参与判定，只打印 `TotalTime` 供对照）+ `sleep 5` + `force-stop`，
+然后才做真正被测的那次 `am start -W`。整段插在 `adb logcat -c` **之后**，所以预热自己
+的日志**落在**崩溃断言窗口内——这是有意的：预热要是还能闹出 ANR，说明 AOT 没生效、
+被测那次同样不可信，宁可红。残留风险：个别镜像上 `cmd package compile` 行为不一致，
+预热失败时那次冷启动仍可能自己 ANR 造成假红；真要收窄就在 `force-stop` 之后再
+`logcat -c`（含 `-b crash -c`）一次，代价是断言窗口变窄，目前先不做。
+落地在 `.github/workflows/build-apk.yml`，说明见 `references/ci-workflow.md`。
+
+### J2. Dependency Review 在 private 仓库必红，与代码质量无关
+
+**症状**：`dependency-review.yml` 红在 `gradle/actions` 的
+`Generate and submit dependency graph` 步骤：
+
+```
+The Dependency graph is disabled for this repository. Please enable it before submitting snapshots.
+```
+
+**机制**：GitHub 的 dependency graph / dependency review 对 **private 仓库**要求
+Advanced Security 授权；未授权时该仓库根本提交不了快照，Action 直接报错退出。
+模板仓库是 public，所以**同一份工作流在模板上是绿的**——红绿差异完全由仓库可见性决定。
+
+**判据**：先确认仓库可见性与 Advanced Security 状态（`Settings → Code security and
+analysis`），再决定这是不是真问题。派生到 private 仓库且未开 Advanced Security 时，
+这条红是预期行为，不要顺着它去改依赖或工作流。
+
+### J3. 「截图文件非空」不能证明画面渲染出来了
+
+**实证**：上面那次判红的 run 里，冒烟第 3 项（`screencap -p` 产物非空）是**通过**的——
+`screen.png` 有 1440x3120、24472 bytes。但用纯 python 标准库解 PNG 后网格采样，
+**整屏只有一个颜色 `000000`**：J1 的 ANR 之后 activity 重启，截图正好撞在重启的过渡黑帧上。
+对照模板绿 run 的截图是 355230 bytes 真内容。
+→ `test -s` 这种非空判据会放走全黑屏，判「画没画出来」至少要数颜色数。
+
+**实用技巧**：runner 上**不能假定 Pillow 可用**，判空白屏可以用 python3 标准库自己解
+PNG，四步：`struct` 读 IHDR 拿宽高/位深/颜色类型 → `zlib.decompress` 拼所有 IDAT →
+逐行还原 5 种 PNG filter type（None/Sub/Up/Average/Paeth）→ 网格采样数唯一颜色数，
+结果 `<= 1` 即空白屏。screencap 产物是 8-bit RGB/RGBA，按 bpp 对齐取整像素字节切片即可。
+filter 还原依赖已还原的左邻与上一行，所以**必须整屏顺序解，不能跳行**——解码一次、
+采样另算，别指望「只解采样到的那几行」能省时间。
+
+**两个实测踩到的坑**：
+1. **固定网格会和周期规整的图案整步混叠**。40px 固定网格采 20px 棋盘，采到的点全落在
+   同一种颜色上 → 唯一颜色数 `== 1`，把真内容误判成空白屏。改成**逐行错相**
+   （`range((k * 17) % 40, w, 40)`，17 与 40 互质）后同一张棋盘正确报 2。
+2. **判据自己出问题时要退化、不能硬红**。python 缺失、PNG 是隔行/16-bit 等不认识的
+   变体，都应输出 `SKIP` 并**退回旧的「非空」判据**（打印一行 `??` 提示）。在这里硬
+   FAIL 会把工具链问题算成 app 缺陷，而判据退化只是少一层保险。
 

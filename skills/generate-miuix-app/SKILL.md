@@ -5,7 +5,7 @@ metadata:
   version: "1.0.0"
   upstream-miuix: "top.yukonga.miuix.kmp 0.9.4-rc01 (github.com/compose-miuix-ui/miuix)"
   template-repo: "https://github.com/guocheng1378/miuix-apk-template"
-  compatibility: 本机不需要 JDK / Android SDK / adb——编译、签名、产物校验全部在 GitHub Actions runner 上完成，本 skill 只做静态生成与 grep 级自检。scripts/gen-keystore.sh 与 scripts/preflight.sh 需要 bash + openssl；scripts/set-gh-secrets.py 需要 python3 + pynacl（建议装进 venv）；scripts/lint-skill.py 只需要 python3 标准库。网络需可达 repo1.maven.org、dl.google.com、api.github.com、raw.githubusercontent.com。写 Secrets 或推 tag 触发 CI 需要 GitHub token。
+  compatibility: 本机不需要 JDK / Android SDK / adb——编译、签名、产物校验全部在 GitHub Actions runner 上完成，本 skill 只做静态生成与 grep 级自检。scripts/derive-app.sh 需要 bash + python3（标准库）；scripts/gen-keystore.sh 与 scripts/preflight.sh 需要 bash + openssl；scripts/set-gh-secrets.py 需要 python3 + pynacl（建议装进 venv）；scripts/lint-skill.py 只需要 python3 标准库。网络需可达 repo1.maven.org、dl.google.com、api.github.com、raw.githubusercontent.com。写 Secrets 或推 tag 触发 CI 需要 GitHub token。
 ---
 
 # 生成 MIUIX 风格 APK 应用
@@ -29,6 +29,7 @@ metadata:
 
 | 你的意图 | 读这个 |
 |---|---|
+| **要做一个新 app**（最常见入口）：从模板派生，改包名/应用名/工程名/存储 key | 上面「派生新 app」＋直接跑 `scripts/derive-app.sh`，**不要手工 sed** |
 | 写/改 `build.gradle.kts`、`settings.gradle.kts`、`gradle.properties`、wrapper；版本选型 | `references/stack-and-build.md` |
 | 写 Compose 代码：miuix import 路径、真实签名、导航/blur/preference/theme 接线、液态玻璃组件 | `references/miuix-api.md` |
 | 大标题折叠不生效、`TopAppBar` 与 `PullToRefresh` 怎么联动 `ScrollBehavior`、`textureBlur` 传参类型不匹配 | `references/pitfalls.md` I 节（滚动接线）＋ A 节（编译期签名） |
@@ -45,8 +46,33 @@ metadata:
 不要重新实现——`textureBlur`/`layerBackdrop`/`Highlight` 的真实参数组合和「一个 backdrop
 实例一个注册点」那条（不可协商项 12）都固化在这批源码里，手写极易踩 G1 那个首帧 SIGSEGV。
 
-已有参考实现（如本仓库）时**优先派生**：以它为基线改包名/应用名/主题色/页面，
-而不是从空白重写。从零生成时按 `stack-and-build.md` 的目录结构建。
+## 派生新 app（推荐路径，别手工 sed）
+
+已有参考实现（如本仓库）时**优先派生**，不要从空白重写。派生**必须用脚本**：
+
+```bash
+bash skills/generate-miuix-app/scripts/derive-app.sh \
+  --package io.demolab.notes --name "Notes Demo" --out ../myapp
+```
+
+脚本一次做完 6 件事并自动跑 preflight：工程文件文本替换（只碰 `app/ shared/ .github/ *.kts
+*.properties`，**不动 `skills/` 与 `README.md`**，那里的旧包名是文档事实叙述）、源码目录随包名
+移动、应用名、工程名、SharedPreferences key、`assets/` workflow 镜像同步，最后做旧包名残留自查。
+
+**为什么不接受手工改：包名同时存在于文本和目录路径两处，另有 3 项「不改也能编译、但装上去
+还是模板身份」的隐性项，且全部静默**——preflight 查不出来（本版实测手工派生时漏掉过
+`app_name` / `rootProject.name` / prefs key 三处，目录移动还写错过一次多套一层）。
+脚本对每个隐性项用 `must_replace`：没命中就报错退出，不接受静默跳过。
+
+派生后必做的两件事（脚本结尾会打印）：
+
+1. **配 4 条签名 Secrets**（`SIGNING_KEY` / `KEYSTORE_PASSWORD` / `KEY_ALIAS` / `KEY_PASSWORD`）。
+   新仓库没有密钥时 CI **会主动失败**（`Verify APK signature` 对 unsigned 产物 `exit 1`），
+   这是有意设计，防止装不上的包上 Release 页——不是派生出错了。
+2. 改页面内容（`shared/.../App.kt` 与各页面）、主题色（`shared/.../ui/Theme.kt`）。
+
+从零生成（没有可派生的模板仓库）时才按 `stack-and-build.md` 的目录结构建，
+并把 `assets/liquid/` 整目录拷进去。
 
 ## 不可协商项（Non-Negotiables）
 

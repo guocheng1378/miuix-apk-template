@@ -131,6 +131,8 @@ jobs:
           distribution: zulu
           java-version: "21"
 
+      # v8 相比 v7 只是内部迁移到 ESM，并把 digest 不匹配从「告警」改成「默认报错」——
+      # 正好是我们想要的：冒烟测的必须是 build 原样产出的那个包，传输截断要直接红。
       - name: Download release APK
         uses: actions/download-artifact@v8
         with:
@@ -174,8 +176,9 @@ jobs:
         run: |
           cat > "$RUNNER_TEMP/smoke.sh" <<'SMOKE_EOF'
           #!/usr/bin/env bash
-          # 安装 → 拉起 → 等渲染 → 截图 → 查崩溃。全程只收集证据，最后统一判定，
-          # 这样即使中途失败，artifact 里也有完整的现场可供排查。
+          # 安装 → 预热（AOT + 抛弃式启动）→ 拉起 → 等渲染 → 截图 → 查崩溃。
+          # 全程只收集证据，最后统一判定，这样即使中途失败，
+          # artifact 里也有完整的现场可供排查。
           ADB="$(command -v adb || echo "$ANDROID_HOME/platform-tools/adb")"
           APK="$(find smoke-apk -name '*.apk' -type f | head -1)"
 
@@ -187,8 +190,9 @@ jobs:
           mkdir -p "$OUT_DIR"
           FAIL=0
 
-          # 先清空 logcat：崩溃断言的窗口只覆盖「安装→启动→渲染」这段，
-          # 不把模拟器开机时其它系统进程的噪音算进来。
+          # 先清空 logcat：崩溃断言的窗口只覆盖「安装→预热→启动→渲染」这段，
+          # 不把模拟器开机时其它系统进程的噪音算进来。预热因此落在窗口内：
+          # 它自己要是还能闹出 ANR，说明 AOT 没生效、被测那次同样不可信，宁可红。
           "$ADB" logcat -c
 
           "$ADB" install -r -g "$APK" > "$OUT_DIR/install.log" 2>&1
@@ -197,6 +201,30 @@ jobs:
           if [ "$INSTALL_RC" -ne 0 ] || ! grep -qi "Success" "$OUT_DIR/install.log"; then
             echo "!! 安装失败（装不上）"; FAIL=1
           fi
+
+          # ---- 预热：把冷 AVD 首启的 dexopt 成本提前付掉 ----
+          # 实测对照：派生仓库 AVD 缓存未命中、现场新建那次，logcat 里
+          # "Dexopt result ... actualCompilerFilter=verify, dex2oatWallTimeMillis=7387"，
+          # am start 的 TotalTime 7653ms，随后 InputDispatcher "spent 6368ms processing
+          # FocusEvent(hasFocus=true)" 撞上 5003ms 输入分发超时 → "ANR in <pkg>"，冒烟判红；
+          # 同一份代码在缓存命中的模板仓库上 TotalTime 只有 4705ms，是绿的。差的这 ~3s
+          # 全在首启现付的 verify 级解释执行上——那是环境冷启动慢，不是 app 缺陷，
+          # 所以这里先把它跑掉，让真正被测的那次启动是热进程/热页缓存。
+          # 位置：整段只能在 install 之后（cmd package compile 只对已安装的包有效）、
+          # 判定用的那次 am start 之前。它落在 logcat -c 之后，也就是**在**崩溃断言窗口内——
+          # 这是有意取舍：预热自己还能闹出 ANR，说明 AOT 根本没生效、被测那次同样不可信，
+          # 宁可红。若想彻底排除预热日志的干扰，可在下面 force-stop 之后再补一次
+          # logcat -c（含 -b crash -c），代价是断言窗口收窄、不再覆盖预热阶段。
+          # 个别镜像上 cmd package compile 行为不一致，预热失败不该让冒烟直接红，
+          # 但要把情况打印出来让人看见（真没热起来，下面那次启动的 ANR 仍照原样判红）。
+          "$ADB" shell cmd package compile -m speed -f "$APP_ID" \
+            || echo "!! AOT 预热未成功（rc=$?），首启可能仍是 verify 级，冒烟有假红风险"
+          # 抛弃式启动：只为把解释执行、页缓存、类加载热一遍，成败不参与判定，
+          # 只打印 TotalTime 供人对照（预热有效时应明显低于冷启的 7653ms）。
+          "$ADB" shell am start -W -n "$APP_ID/$APP_ID.MainActivity" > "$OUT_DIR/warmup-start.log" 2>&1 || true
+          echo "预热启动: $(grep -i 'TotalTime' "$OUT_DIR/warmup-start.log" || echo '未取到 TotalTime')"
+          sleep 5
+          "$ADB" shell am force-stop "$APP_ID" || true
 
           # -W 让 am 等到 activity 启动完成再返回，并打印 Status / TotalTime。
           "$ADB" shell am start -W -n "$APP_ID/$APP_ID.MainActivity" > "$OUT_DIR/am-start.log" 2>&1
@@ -209,12 +237,99 @@ jobs:
           # Compose 首帧 + 模糊层建立需要一点时间，等它稳定后再取证。
           sleep 8
 
-          # 只截图不判像素：文件非空即认为「画面出来了」。
+          # 截图判据不能只看非空：实测判红那次 screen.png 有 1440x3120、24472 bytes，
+          # 但整屏按网格采样只有一个颜色 000000（ANR 后 activity 重启，截图正好撞在
+          # 过渡帧上）；模板那次绿 run 是 355230 bytes 真内容。所以补一层「非单色空白屏」。
           "$ADB" exec-out screencap -p > "$OUT_DIR/screen.png"
-          if [ -s "$OUT_DIR/screen.png" ]; then
-            echo "截图: $OUT_DIR/screen.png ($(wc -c < "$OUT_DIR/screen.png") bytes)"
-          else
+          if [ ! -s "$OUT_DIR/screen.png" ]; then
             echo "!! screencap 输出为空"; FAIL=1
+          else
+            # runner 上不保证有 Pillow，只能用 python3 标准库（struct + zlib）自己解 PNG。
+            # 这里是外层 <<'SMOKE_EOF' 里再套一个 <<'PY'：外层带引号所以整段原样落进
+            # smoke.sh，运行时由 smoke.sh 自己的 heredoc 落成 .py 文件。两个分隔符不同名，
+            # 嵌套合法。整段 python 与 heredoc 正文同级缩进 10 空格——YAML 块标量剥掉这层
+            # 公共缩进之后，落到 smoke.sh 里正好是顶层语句顶格、嵌套块按 4 空格递进。
+            cat > "$RUNNER_TEMP/blankpng.py" <<'PY'
+          import sys, struct, zlib
+          # 输出 "<唯一颜色数> <采样点数> <宽> <高>"；遇到解不动的变体输出 "SKIP <原因>" 并退 3。
+          d = open(sys.argv[1], 'rb').read()
+          if d[:8] != b'\x89PNG\r\n\x1a\n':
+              print('SKIP not-a-PNG'); sys.exit(3)
+          pos = 8; idat = b''; plte = b''; w = h = bd = ct = ilv = 0
+          while pos + 8 <= len(d):
+              ln = struct.unpack('>I', d[pos:pos + 4])[0]
+              typ = d[pos + 4:pos + 8]; data = d[pos + 8:pos + 8 + ln]
+              if typ == b'IHDR':
+                  w, h, bd, ct, cm, fm, ilv = struct.unpack('>IIBBBBB', data[:13])
+              elif typ == b'PLTE':
+                  plte = data
+              elif typ == b'IDAT':
+                  idat += data
+              elif typ == b'IEND':
+                  break
+              pos += 12 + ln
+          if ilv or bd != 8 or ct not in (0, 2, 3, 4, 6) or w <= 0 or h <= 0:
+              print('SKIP interlace=%d depth=%d colortype=%d' % (ilv, bd, ct)); sys.exit(3)
+          ch = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[ct]
+          stride = w * ch
+          raw = zlib.decompress(idat)
+          prev = bytearray(stride)
+          colors = set(); n = 0; o = 0; k = 0
+          for y in range(h):
+              f = raw[o]; o += 1
+              line = bytearray(raw[o:o + stride]); o += stride
+              if f:
+                  # 逐字节还原 5 种 filter：Sub/Up/Average/Paeth 都依赖已还原的左邻与上一行，
+                  # 所以必须整屏顺序解，不能跳行——这也是为什么只解码一次、采样另算。
+                  for x in range(stride):
+                      a = line[x - ch] if x >= ch else 0
+                      b = prev[x]
+                      c = prev[x - ch] if x >= ch else 0
+                      if f == 1:
+                          line[x] = (line[x] + a) & 255
+                      elif f == 2:
+                          line[x] = (line[x] + b) & 255
+                      elif f == 3:
+                          line[x] = (line[x] + (a + b) // 2) & 255
+                      else:
+                          pp = a + b - c
+                          pa = abs(pp - a); pb = abs(pp - b); pc = abs(pp - c)
+                          pr = a if (pa <= pb and pa <= pc) else (b if pb <= pc else c)
+                          line[x] = (line[x] + pr) & 255
+              prev = line
+              if y % 40 == 0:
+                  # 每 40 像素取一点，但逐行错开 17 的相位：固定网格会和周期规整的图案
+                  # （例如 20px 棋盘）整步混叠，采出来全是同一种颜色，把真内容误判成空白屏。
+                  for x in range((k * 17) % 40, w, 40):
+                      i = x * ch
+                      if ct == 3:
+                          rgb = bytes(plte[line[i] * 3:line[i] * 3 + 3])
+                      elif ct in (0, 4):
+                          g = line[i]; rgb = bytes((g, g, g))
+                      else:
+                          rgb = bytes(line[i:i + 3])
+                      colors.add(rgb); n += 1
+                  k += 1
+          print('%d %d %d %d' % (len(colors), n, w, h))
+          PY
+            PNG_BYTES="$(wc -c < "$OUT_DIR/screen.png")"
+            PNG_STATS="$(python3 "$RUNNER_TEMP/blankpng.py" "$OUT_DIR/screen.png" 2>&1)"
+            PNG_RC=$?
+            UNIQ="$(printf '%s\n' "$PNG_STATS" | awk '{print $1}')"
+            PTS="$(printf '%s\n' "$PNG_STATS" | awk '{print $2}')"
+            case "$UNIQ" in
+              ''|*[!0-9]*)
+                # 解析器自己出问题（python 缺失、PNG 变体不认识）时退回旧的「非空」判据：
+                # 判据退化只是少了一层保险，而在这里硬 FAIL 会把工具链问题算成 app 缺陷。
+                echo "?? 截图未参与像素判定（rc=$PNG_RC，$PNG_STATS），按非空放行 $PNG_BYTES bytes";;
+              *)
+                if [ "$UNIQ" -le 1 ] || [ "${PTS:-0}" -lt 10 ]; then
+                  echo "!! 截图是空白屏：$PNG_BYTES bytes，采样 ${PTS:-0} 点只有 $UNIQ 个唯一颜色（单色即判空）"
+                  FAIL=1
+                else
+                  echo "截图: $OUT_DIR/screen.png $PNG_BYTES bytes / 唯一颜色 $UNIQ 个（采样 $PTS 点）"
+                fi;;
+            esac
           fi
 
           # 进程还在 = 没有启动即闪退；pidof 为空则基本是崩了或被系统杀掉。
@@ -268,7 +383,7 @@ jobs:
             echo "!! 冒烟未通过，证据见 smoke-evidence artifact"
             exit 1
           fi
-          echo "冒烟通过：安装成功、activity 启动、进程存活、无崩溃"
+          echo "冒烟通过：安装成功、activity 启动、进程存活、截图有内容、无崩溃"
           SMOKE_EOF
           chmod +x "$RUNNER_TEMP/smoke.sh"
 
@@ -279,8 +394,8 @@ jobs:
       # （Google 的 sys-img 清单里 android-34 只有 x86_64 和 arm64-v8a）。
       #
       # 关于截图：-gpu swiftshader_indirect 是软件光栅化，RenderEffect 模糊的质感、
-      # 折射与真机 GPU 差异很大。所以 screen.png 只能用来断言「画没画出来 / 有没有崩」，
-      # 不能当像素级视觉基线，也不要拿它做 diff 比对。
+      # 折射与真机 GPU 差异很大。所以 screen.png 只能用来断言「画没画出来 / 有没有崩」
+      # （以及现在这层「不是单色空白屏」），不能当像素级视觉基线，也不要拿它做 diff 比对。
       - name: Install, launch and capture
         uses: reactivecircus/android-emulator-runner@v2
         with:

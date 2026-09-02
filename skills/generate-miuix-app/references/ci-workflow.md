@@ -67,15 +67,33 @@ build  ──►  smoke（needs: build）
 - 冒烟判定**五项**（逐项 `FAIL=1`，最后统一判定，中途失败也先把证据收全）：
   1. `adb install -r -g` 退出码为 0 **且** 输出含 `Success`；
   2. `am start -W` 输出含 `Status: ok`；
-  3. `screencap -p` 输出文件非空（`-s`）；
+  3. `screencap -p` 输出文件非空（`-s`）**且不是单色空白屏**（见下）；
   4. `pidof <包名>` 非空（没启动即闪退）；
   5. logcat 无崩溃特征，正则 `FATAL EXCEPTION|Fatal signal|ANR in |E/AndroidRuntime|E AndroidRuntime`
      —— 斜杠版和空格版**都要写**：`logcat -v time` 输出 `E/AndroidRuntime`，
      默认的 threadtime 格式输出 `E AndroidRuntime`，只写一种会漏。
      `ANR in` 后面带空格，避免匹配到 `ANR in` 之外的词。
-  判定前先 `adb logcat -c` 清缓冲，让崩溃窗口只覆盖「安装→启动→渲染」这段。
-  截图只断言「画没画出来」——`-gpu swiftshader_indirect` 是软件光栅化，
+     崩溃特征还要**按归属过滤**（本行带包名 / 下一行 `Process: <包名>` / tag 括号里的
+     pid 属于本包，三者命中任一即算本 app），否则同窗口内别的系统进程崩溃会随机判红。
+  判定前先 `adb logcat -c` 清缓冲，让崩溃窗口只覆盖「安装→预热→启动→渲染」这段。
+  截图只断言「画没画出来 / 是不是单色」——`-gpu swiftshader_indirect` 是软件光栅化，
   RenderEffect 模糊质感与真机 GPU 差异极大，**不能**当像素级视觉基线做 diff。
+- **截图判据不能只看非空**：实测一次判红里 `screen.png` 有 1440x3120、24472 bytes，
+  但整屏只有一个颜色 `000000`（ANR 后 activity 重启，截图正好撞在过渡帧上）。
+  补了一层像素判定：runner 上**不保证有 Pillow**，用 python3 标准库（`struct` + `zlib`）
+  自己解 IHDR/PLTE/IDAT、逐行还原 5 种 filter，按 40px 网格**逐行错相 17** 采样
+  （固定网格会和周期规整的图案整步混叠，把真内容误判成空白屏），输出
+  「唯一颜色数 / 采样点数」，**唯一颜色 ≤ 1 或采样点 < 10 即判空白屏**。
+  解析器自己出问题（python 缺失、PNG 是不支持的变体如隔行/16-bit）时**退回旧的
+  「非空」判据**而不是硬 FAIL——判据退化只是少一层保险，硬红会把工具链问题
+  算成 app 缺陷。实现形式：外层 `<<'SMOKE_EOF'` 里再套一个 `<<'PY'`，运行时由
+  smoke.sh 自己落成 `$RUNNER_TEMP/blankpng.py`；两个分隔符不同名所以嵌套合法。
+- **预热**：install 之后、判定用的那次 `am start` 之前，插一段 `cmd package compile
+  -m speed -f <包名>`（失败只打印不判红）+ 一次抛弃式 `am start -W`（`|| true`，
+  成败不参与判定，只打印 `TotalTime` 供对照）+ `sleep 5` + `force-stop`。
+  动机：冷 AVD 首启只做 verify 级 dexopt（实测 `dex2oatWallTimeMillis=7387`、
+  `TotalTime 7653ms`），主线程被钉住 → `FocusEvent` 输入分发超时 → `ANR in`，
+  那是**环境冷启动慢不是 app 缺陷**。机制与对照实验见 `references/pitfalls.md` J1。
 - 前台 activity 只观测不判定（`dumpsys` 字段格式随版本变，硬断言会假失败）。
 
 ### 有意的取舍：冒烟失败时 Release 已经发出去了

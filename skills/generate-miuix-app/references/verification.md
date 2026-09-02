@@ -157,6 +157,7 @@ gradle :app:assembleRelease --no-daemon
 
 本机无 JDK/Gradle/SDK 时**做不了**。仓库现有三套 workflow 覆盖构建、
 JVM 截图回归、依赖审查，各自触发条件与坑见 `ci-workflow.md`。
+派生工程的端到端实跑判读（对照实验、job 优先级、产物核对）见下「端到端派生验证」一节。
 
 ### 3. 二进制检测
 
@@ -173,6 +174,77 @@ JVM 截图回归、依赖审查，各自触发条件与坑见 `ci-workflow.md`�
 下拉刷新、左滑删除 + 撤销、主题/主题色**重启后**仍保留、详情页回显图片。
 
 需要真机/模拟器，本机做不了 → `build-apk.yml` 的 `smoke` job。
+它曾有两类已知假红（冷 AVD dexopt 触发的输入分发超时 ANR、截图非空但全黑），
+现已在 workflow 侧各加了一层防护：前者用「install 后强制 AOT + 抛弃式预热启动」
+消掉，后者把非空判据换成「解 PNG 数唯一颜色数」。定性判据与残留风险见
+`references/pitfalls.md` J1 / J3，落地形态见 `references/ci-workflow.md`。
+
+## 端到端派生验证（脚手架 → CI → 产物）
+
+「派生一个新包名工程并让它云端出包」只有真跑一遍才算验证过。2026-09-02 实测：
+脚手架派生 `com.demostudio.reader` → 推到新建 private 仓库
+`guocheng1378/miuix-derived-smoke` → 配齐 4 条签名 Secrets → 打 tag `v0.1.0`。
+build job 19 步全绿，Release 资产 `app-release.apk` 9322626 bytes；smoke 与
+Dependency Review 红，按下面第一条定性为环境/授权问题、非派生缺陷
+（逐条证据见 `references/pitfalls.md` J 节）。规则如下。
+
+### 对照实验是唯一的定性手段
+
+CI 冒烟红了**不要先去改代码**。正确动作：在**模板仓库**对同一 commit
+`workflow_dispatch` 一次 `build-apk.yml`，两边对比：
+
+| 模板 | 派生 | 结论 |
+|---|---|---|
+| 绿 | 红 | 派生真的引入了缺陷，去查派生差异 |
+| 红 | 红 | 环境/模拟器/仓库授权问题，与派生无关 |
+| 绿 | 绿 | 缺陷已不存在（红是旧状态） |
+
+本次实测就是靠这条把冒烟红定性成冷 AVD 环境抖动（pitfalls J1），
+省掉一轮无意义的代码排查。
+
+### 各 job 的判读优先级
+
+- **`build`（编译 + 签名 + 出 Release）是硬结论**：只要它全绿、且 Release 上有非空
+  APK 资产，「这个 skill 能生成可用 app」这个命题就成立。
+- **`smoke` 与 `Dependency Review` 是弱信号**：它们对运行环境与仓库授权敏感，
+  红了先按 pitfalls J 节定性，不要反推构建有问题。
+- **Screenshot Regression（`test.yml`）与模拟器冒烟是两条独立路径**：前者走
+  JVM/Robolectric，后者走真模拟器，一绿一红互不矛盾（本次实测即如此）。
+
+### 怎么核对产物
+
+```bash
+curl -s https://api.github.com/repos/<owner>/<repo>/releases/tags/<tag> \
+  | grep -E '"name"|"size"|"browser_download_url"'
+# 下载资产后本地算哈希
+sha256sum app-release.apk
+```
+
+匿名请求占 API 配额（60/小时，见上文），一次核对一个请求就够。本次实测值：
+`app-release.apk` **9322626 bytes**，sha256
+`80b3696462b3826b5cb85fe32fd78665f4bb0364f294ccb870f3743ef7911612`。
+
+**派生仓库的 APK sha256 与模板产物必然不同**——包名不同、签名证书指纹不同
+（派生仓库用的是现场新生成的 keystore），所以「和模板的哈希不一样」**不是缺陷信号**。
+产物核对只回答两件事：资产存在且字节数合理、哈希与本次 CI 产物一致。
+
+### 无签名密钥时 CI 主动失败是有意设计
+
+新仓库没配 4 条 Secrets（`SIGNING_KEY` / `KEYSTORE_PASSWORD` / `KEY_ALIAS` /
+`KEY_PASSWORD`）时，`Verify APK signature` 步骤会对 `app-release-unsigned.apk`
+直接 `exit 1`——防止一个装不上的包被挂上 Release 页。**这不是派生出错**，
+先按 `signing-and-secrets.md` 配齐 Secrets 再重跑。
+
+### 当前仍未被自动化覆盖的部分
+
+如实记录，别把「build 绿」读成「全验证过」：
+
+- **详情页/设置页的新接线没有端到端渲染覆盖**——截图回归只跑 JVM 渲染的既有
+  `preview.settings` 用例，emulator 冒烟只验到首页启动。
+- **真机手感未验证**：手势返回、下拉刷新手感、左滑删除阈值、液态玻璃真机观感，
+  开发环境只有 CI 模拟器。
+- **构建期依赖漏洞扫描在 private 仓库跑不起来**（Advanced Security 授权门槛，
+  见 pitfalls J2），派生到 private 仓库时这一层检查是空的。
 
 ## 报告纪律
 
