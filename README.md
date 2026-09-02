@@ -2,9 +2,24 @@
 
 用 **MIUIX 组件库**（`top.yukonga.miuix.kmp:miuix-ui`）搭建原生 Android 界面并产出 Release APK 的通用脚手架：**配好签名 Secrets 才产出已签名 APK**，未配置时产出 `app-release-unsigned.apk`（需自行用 `apksigner` 对齐并签名后才能安装/发布）。
 
-全流程托管在 GitHub：把仓库推上去 →（可选）配置 Secrets → 打 `v*` tag（或手动触发）→ GitHub Actions 自动编译（配了密钥则同时签名）→ 产物为 APK（可下载 / 打 tag 时自动建 Release）。
+全流程托管在 GitHub：把仓库推上去 → 配置签名 Secrets（不配的话 CI 的签名校验一步会直接判失败，见下文）→ 打 `v*` tag（或手动触发）→ GitHub Actions 自动编译并签名 → 产物为 APK（可下载 / 打 tag 时自动建 Release）。
 
 > 本机**无需**安装 JDK / Android SDK；构建与签名全部在 GitHub Actions（自带 JDK 21 + Android SDK，并由 `setup-gradle` 提供 Gradle）完成。
+
+**当前状态**：签名发布链路**已跑通**——本仓库已配置正式签名 Secrets，`v1.0.2` 已作为**已签名** Release 发布（APK Signature Scheme v2，可直接下载安装），见[已发布版本与产物校验](#已发布版本与产物校验)。
+测试体系**仍在补齐**：仓库目前没有任何自动化测试，CI 只做编译 + `apksigner` 签名校验，尚无运行时验证，见[测试与验证现状](#测试与验证现状)。
+
+## 能力清单（代码里实际有的）
+
+- **悬浮液态玻璃底栏**：`miuix-blur` 的 `LayerBackdrop` / `textureBlur` / `Highlight` + 设备倾斜传感器（`rememberDeviceTilt`）组合成 `IosLiquidGlassNavigationBar`，实时折射背后画面；不支持 `RuntimeShader` 的设备自动降级为纯色底栏。
+- **miuix-nav 页面栈**：三个顶层 tab（首页 / 图片 / 设置）+ 带参详情页 `Route.Detail(id)`，支持 push/pop/replace、边缘滑动返回、系统预测性返回手势、返回栈跨配置变更保存。
+- **主题**：深/浅色与强调色切换（`ThemeController`），偏好经 `SharedPreferences` 持久化，重启保留。
+- **首页**：大标题折叠 TopAppBar、下拉刷新、左滑删除 + Snackbar 撤销、`OverlayBottomSheet` 底部弹层、FAB。
+- **图片页**：`LazyVerticalGrid` + Coil 3 `SubcomposeAsyncImage`，带加载中/失败占位，点击进详情页回显该图。
+- **设置页**：`miuix-preference` 的 `RadioButtonPreference`（主题/主题色）+ `SwitchPreference`（通知）。
+- **edge-to-edge**、squircle 连续圆角降级、自定义启动图标。
+- **静态原型**：`preview.html`（浏览器打开的 HTML 版式稿，不参与 Gradle 构建）。
+- **CI 与发布**：Actions 编译 release APK → `apksigner verify` 校验签名 → 上传 artifact → `v*` tag 自动建 GitHub Release 附 APK。
 
 ## 技术栈（CI 端到端编译验证通过的组合）
 
@@ -27,22 +42,30 @@
 
 ```
 miuix-apk-template/
-├── settings.gradle.kts
+├── settings.gradle.kts             # 无根 build.gradle.kts，插件/依赖版本写在各模块 build 脚本里
 ├── gradle.properties
 ├── gradle/wrapper/gradle-wrapper.properties   # 只提交 properties；gradlew 与 wrapper jar 未入库
+├── preview.html                    # 浏览器里的 HTML 版式稿，不参与构建
 ├── shared/                         # KMP 库：commonMain 放 Compose UI
 │   ├── build.gradle.kts
-│   └── src/commonMain/kotlin/top/yukonga/miuixapptemplate/
-│       ├── App.kt                  # 页面 + 导航
-│       └── Route.kt                # @Serializable 路由定义
+│   └── src/commonMain/kotlin/
+│       ├── top/yukonga/miuixapptemplate/
+│       │   ├── App.kt              # 页面 + 导航 + 主题
+│       │   ├── AppPrefs.kt         # 偏好持久化接口（common）
+│       │   └── Route.kt            # @Serializable 路由定义
+│       ├── component/liquid/       # 液态玻璃底栏（改编自 Kyant0/AndroidLiquidGlass）
+│       ├── component/animation/    # 按压形变 / 高光动效
+│       └── ui/Theme.kt             # 主题色
 ├── app/                            # 纯 Android 应用模块
 │   ├── build.gradle.kts
 │   └── src/main/
 │       ├── AndroidManifest.xml
-│       ├── kotlin/.../MainActivity.kt
+│       ├── kotlin/top/yukonga/miuixapptemplate/
+│       │   ├── MainActivity.kt
+│       │   └── AndroidAppPrefs.kt  # AppPrefs 的 SharedPreferences 实现
 │       └── res/...                 # 图标、主题、字符串
 ├── skills/generate-miuix-app/      # 自动生成同类 App 的 skill
-└── .github/workflows/build-apk.yml # 自动构建 + 签名
+└── .github/workflows/build-apk.yml # 自动构建 + 签名 + 签名校验 + 建 Release
 ```
 
 UI 写在 `shared/src/commonMain/kotlin/top/yukonga/miuixapptemplate/App.kt`，
@@ -102,12 +125,14 @@ base64 -w0 release.keystore
 
 | Secret | 内容 |
 |---|---|
-| `SIGNING_KEY` | `keystore.b64` 的全部文本（base64） |
+| `SIGNING_KEY` | 上面 `base64 -w0 release.p12` 的输出（单行 base64 的 PKCS12 内容） |
 | `KEYSTORE_PASSWORD` | keystore 密码 |
 | `KEY_ALIAS` | `mykey`（上面的 alias） |
 | `KEY_PASSWORD` | 密钥密码 |
 
-> 不配置 Secrets 也能构建，但产物是 **`app-release-unsigned.apk`**——AGP 在没有 signingConfig 时根本不签名，**不会**回退成 debug 签名的可安装包。这种 APK 要安装/上架，需自行 `zipalign` + `apksigner sign`。
+> 四个名字都要对上：workflow 把 `SIGNING_KEY` 解成 `keystore.p12`，再以 `KEYSTORE_PASS` / `KEY_ALIAS` / `KEY_PASSWORD` 三个环境变量传给 Gradle（`app/build.gradle.kts` 里的 `signingProp()` 先读环境变量、再读 `local.properties`）。
+>
+> 缺任何一个密钥时 AGP 干脆不配 signingConfig，产物是 **`app-release-unsigned.apk`**——**不会**回退成 debug 签名的可安装包。而且本仓库 workflow 的 **Verify APK signature** 一步会把未签名产物直接判为 CI 失败，所以 fork 之后要么配齐四个 Secrets，要么放宽那一步，否则分支上的构建永远是红的。这种 unsigned APK 若真要安装/上架，需自行 `zipalign` + `apksigner sign`。
 
 ### 3. 构建命令与签名判定（真实形态）
 
@@ -115,14 +140,69 @@ base64 -w0 release.keystore
 - 不要在 workflow 里现场 `gradle wrapper --gradle-version 8.13` 之类的生成命令——那会造成 AGP 9.x 配 Gradle 8.x 的版本错配。
 - 「密钥有没有」的判断放在 shell step 内部：`if [ -n "$SIGNING_KEY" ]`。GitHub 的 `secrets.*` 不能出现在 step 级 `if:` 表达式里，否则整个 workflow 会被解析成 0 个 job。
 - 构建后有一步 **Verify APK signature**：产物文件名含 `unsigned` 就直接让 CI 失败，并用 runner 自带的 `apksigner verify --print-certs` 打印签名证书指纹——避免把装不上的包挂到 Release 页上。
+- workflow 顶层**必须**写 `permissions: contents: write`：`softprops/action-gh-release` 用 `GITHUB_TOKEN` 建 Release，而缺省权限只有 read。本仓库第一次打 tag 时就是漏了这行，Release 步骤报 403 `Resource not accessible by integration`（构建本身是绿的，很容易看漏），现已修好。
 - Secrets 也可以不走网页、直接用 API 批量写入（自动化场景）：先 `GET /repos/{owner}/{repo}/actions/secrets/public-key` 拿 `key_id` 与公钥，用 NaCl sealed box（PyNaCl `public.SealedBox`）加密，再 `PUT /repos/{owner}/{repo}/actions/secrets/{NAME}`。
 
 ### 4. 触发构建
 
-- 打 tag 推送到 GitHub：`git tag v1.0.0 && git push origin v1.0.0` → 自动构建并创建 GitHub Release 附 APK；
-- 或在 Actions 页面手动 `Run workflow`。
+- 打 tag 推送到 GitHub：`git tag v1.0.3 && git push origin v1.0.3` → 自动构建并创建 GitHub Release 附 APK。tag 版本要与 `app/build.gradle.kts` 的 `versionName` / `versionCode` 对上——`versionCode` 不递增的话，老用户收到也升不上去；
+- 或在 Actions 页面手动 `Run workflow`（手动触发不建 Release，只出 artifact）。
 
 产物在 Actions 的 Artifacts（`app-release-apk`）中下载，文件名取决于是否配了密钥：`app-release.apk` 或 `app-release-unsigned.apk`；打 `v*` tag 时 workflow 会额外创建 GitHub Release 并附上 APK。
+
+## 已发布版本与产物校验
+
+| tag | versionName / versionCode | Release 资产 | 状态 |
+|---|---|---|---|
+| [`v1.0.2`](https://github.com/guocheng1378/miuix-apk-template/releases/tag/v1.0.2) | `1.0.2` / `2` | `app-release.apk`（9306061 字节 ≈ 8.87 MB） | **已签名，可直接下载安装** |
+| `v1.0.1` | — | 无 APK 资产（只有 source zip/tar.gz） | 签名链路启用前的构建 |
+
+下载：`https://github.com/guocheng1378/miuix-apk-template/releases/download/v1.0.2/app-release.apk`
+
+`v1.0.2` 的签名与完整性（CI `apksigner verify --print-certs` 与 Release 页两处一致）：
+
+- 签名方案：**APK Signature Scheme v2**，RSA 2048，单签名者（自签证书）
+- **APK SHA-256**：`ba6ae10d3d8e1136910e7957a76777aa1325749f8530a72538b766bae45d77e5`
+- **证书 SHA-256**：`445a46ddcad6465947735503f6d80f2b556337ff5bd6a67470f378e1092195c7`
+
+拿到 APK 后自行核对：
+
+```bash
+# 1) 完整性：结果应等于上面的 APK SHA-256
+sha256sum app-release.apk
+
+# 2) 签名与证书指纹：Signer #1 certificate SHA-256 digest 应等于上面的证书 SHA-256
+#    apksigner 在 Android SDK 的 build-tools/<版本>/ 下，本机需有 JDK + Android SDK
+apksigner verify --verbose --print-certs app-release.apk
+```
+
+> GitHub 会在每个 Release 资产上直接标 `sha256:<摘要>`，可与上面第一条对照。
+> 换自己的密钥后这两个指纹都会变，别拿本仓库的值去校验 fork 的产物。
+
+## 测试与验证现状
+
+**仓库目前没有任何自动化测试**：没有 `test/` / `androidTest/` 源码集，没有单元测试、没有 Compose UI 测试、没有截图基线。CI（`.github/workflows/build-apk.yml`）只有两步实质性验证——
+
+1. `gradle :app:assembleRelease --no-daemon`：只能证明**编译通过**；
+2. **Verify APK signature**（文件名含 `unsigned` 即失败 + `apksigner verify`）：只能证明**签名正确**，完全不碰运行时。
+
+也就是说，**没有任何一步真正安装并驱动过这个 App**。
+
+正在补齐（本轮改动，尚未全部落地，别当成已完成）：
+
+- **预览截图回归**：把界面渲染成图与基线比对，防止 UI 改版悄悄跑偏；
+- **模拟器冒烟**：在 CI 里起模拟器安装并启动 Activity，检查不崩溃。
+
+**仍未执行**：真机运行时冒烟（`adb install` 后逐页操作）。开发环境没有 JDK / Android SDK / adb / 设备，所以「装得上、点得动、真机上液态玻璃是什么观感」目前**没有任何验证记录**，只有静态编译与签名层面的证据。
+
+## 限制与未验证项
+
+- **本机没 JDK / Android SDK 就构建不了**：仓库只提交了 `gradle-wrapper.properties`，没有 `gradlew` 和 wrapper jar，本地既跑不了 `./gradlew`，也没有 `gradle` 可配 AGP 9.x。所有「构建通过」的结论都来自 GitHub Actions，不是本地实测。
+- **模拟器 / 软件渲染 ≠ 真机质感**：液态玻璃依赖 Android `RuntimeShader` / `RenderEffect`（Android 12+ 且平台实现完整）。模拟器与软件渲染下模糊、折射、高光边缘的表现和真机差得很远，**看模拟器截图判断玻璃效果不可靠**；不支持的平台 `backdrop` 为 null，直接降级成纯色底栏。
+- **真机冒烟未做**：逐页操作、手势返回、下拉刷新手感、左滑删除阈值都没有人工或自动化验证记录（见上一节）。
+- **自签证书，系统会提示「来源不受信任」**：预期行为——没上架商店、没走 Play App Signing。首次安装需在系统里允许「安装未知应用」；换密钥重新签名会导致老包无法覆盖升级。
+- **keystore 一旦丢失就无法覆盖升级**：同一 `applicationId` 必须用同一把签名密钥。`release.p12` 与口令必须异地备份，且永远不能提交进仓库（`.gitignore` 已忽略 `*.jks` / `*.p12` / `*.keystore`）；丢了只能换包名重发，或让老用户卸载重装。
+- **产物未开 R8**：`isMinifyEnabled = false`，所以 `v1.0.2` 的 APK 约 8.9 MB。开混淆要自行补 Compose / MIUIX 的 keep 规则。
 
 ## 液态玻璃 + miuix-nav 导航
 
@@ -141,9 +221,9 @@ base64 -w0 release.keystore
 用 `miuix-nav` 替代了标准 Compose 的 `AnimatedContent`，提供：
 
 - **页面栈**：顶层三 tab + 详情页（`Route.Detail(id)`），支持 push/pop/replace；
-- **返回手势**：边缘滑动返回 + 系统预测性返回手势（`PredictiveBackHandler`）；
-- **状态保存**：返回栈跨配置变更/进程重建自动保存（`@Serializable` + `rememberSaveable`）；
-- **转场动画**：默认 MIUI 风格（`NavTransitions.MiuixDefault`），支持每页独立覆盖。
+- **返回手势**：`NavDisplay` 自带边缘滑动返回与系统预测性返回手势（`App.kt` 里没有手写 handler）；
+- **状态保存**：返回栈跨配置变更/进程重建自动保存（`@Serializable` 路由）；
+- **转场动画**：miuix-nav 默认转场，详情页 push/pop 自带过渡。
 
 #### 路由定义
 
@@ -197,7 +277,7 @@ Scaffold(bottomBar = { ... }) { innerPadding ->
 - **开 R8 混淆**：模板默认 `isMinifyEnabled = false` 以保证首编通过。需要体积优化时，在 `app/build.gradle.kts` 将其设为 `true` 并补充 proguard 规则（Compose / MIUIX 的 keep 规则）。
 - **换 MIUIX 模块**：在 `shared/build.gradle.kts` 的 `commonMain.dependencies` 增删。模板默认六个模块全开（`miuix-ui` / `miuix-icons` / `miuix-blur` / `miuix-nav` / `miuix-preference` / `miuix-squircle`），用不到可直接注释掉。
 - **图片不显示**：确认真机/模拟器联网；`INTERNET` 权限和 `coil-network-okhttp` 依赖在模板里已配好，若自定义模块记得补上。
-- **跑模拟器验证**：`adb install app/build/outputs/apk/release/*.apk`。注意 `app-release-unsigned.apk` 装不上，要先 `zipalign` + `apksigner` 签名。
+- **跑模拟器 / 真机验证**：`adb install app/build/outputs/apk/release/app-release.apk`（Release 页上的 `app-release.apk` 也可直接下载装机）。注意 `app-release-unsigned.apk` 装不上，要先 `zipalign` + `apksigner` 签名。**本仓库的开发环境没有 adb 和设备，这条路径至今没实际跑过**，装机后是否崩溃属于未验证项。
 - **上架 Play Store**：改用 `gradle :app:bundleRelease` 产出 AAB 再提交（Play 要求上传已签名的 AAB）。
 
 ### 写代码时的真实坑（都编译验证过）
