@@ -12,3 +12,7 @@ keystore.p12
 # IDE
 .idea/
 *.iml
+
+# Python 校验脚本产物
+__pycache__/
+*.pyc

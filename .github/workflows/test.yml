@@ -59,6 +59,18 @@ jobs:
         # 基线建好后改成：
         # run: gradle :shared:check -Proborazzi.test.verify=true --no-daemon --stacktrace
 
+      # Gradle 的 test 日志受 build.gradle.kts 里 testLogging 配置控制，一旦那处没生效
+      # （或异常被反射层层包装），日志里就只剩一个异常类名。JUnit XML 里存的是原始
+      # <failure message="..."> + 完整 stack-trace，不受 Gradle 日志级别影响，
+      # 所以失败时无条件把它摊到日志上，保证一次 CI 就能定位。
+      - name: Dump test results on failure
+        if: failure()
+        run: |
+          find shared/build/test-results -name '*.xml' -type f 2>/dev/null | while read -r f; do
+            echo "===== $f ====="
+            cat "$f"
+          done
+
       # 防止「假绿」：如果 @Preview 扫描范围配错（比如 packages 写错、CPS 用了 :common
       # 变体），测试会 0 条通过、构建全绿但一张图都没有。这里显式要求至少产出一张 PNG。
       - name: Ensure screenshots were produced

@@ -120,4 +120,14 @@ tasks.withType<Test>().configureEach {
     systemProperty("roborazzi.record.filePathStrategy", "relativePathFromRoborazziContextOutputDirectory")
     // 整屏截图 + AGSL 着色器比较吃堆，默认堆容易 OOM。
     maxHeapSize = "2048m"
+    // Gradle 默认的 test 日志只打「异常类名 + 调用位置」，不带消息体和堆栈。
+    // CI 上排查预览渲染失败时，只有类名的话等于没有信息（实际踩过：6 条预览全报
+    // IllegalArgumentException，日志里连一句 message 都没有）。
+    testLogging {
+        events = setOf(org.gradle.api.tasks.testing.logging.TestLogEvent.FAILED)
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        showExceptions = true
+        showCauses = true
+        showStackTraces = true
+    }
 }
