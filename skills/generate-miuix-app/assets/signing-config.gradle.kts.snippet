@@ -1,0 +1,74 @@
+// app 模块签名块模板
+//
+// 摘自本仓库 app/build.gradle.kts（2026-09-02）。仓库里那份是权威。
+// 放在 android { ... } 块内部使用。
+//
+// 三个设计点，动之前先看懂：
+//   1. 只在 keystore 文件真的存在时才创建 signingConfig。
+//      否则本地没有密钥的机器上直接配置阶段报错，而 CI 未配 Secrets 时
+//      也应当正常产出 app-release-unsigned.apk，而不是崩在配置阶段。
+//   2. storeType = "PKCS12" 不能省。密钥用 openssl pkcs12 -export 生成（无需 JDK），
+//      AGP 默认按 JKS 读取会失败。
+//   3. signingProp 先读环境变量（CI 路径），回退 local.properties（本地路径）。
+//      口令绝不写进 gradle.properties —— 那个文件是提交的。
+
+// 仅在提供了签名密钥（CI Secrets 或本地 local.properties）时才配置签名。
+// 未提供时 release 不做签名，产物为 app-release-unsigned.apk（需自行 zipalign + apksigner 才能安装/上架）。
+val localProps = Properties().apply {
+    val lp = rootProject.file("local.properties")
+    if (lp.exists()) lp.inputStream().use { load(it) }
+}
+fun signingProp(name: String): String? = System.getenv(name) ?: localProps.getProperty(name)
+
+val keystoreFile = signingProp("KEYSTORE_PATH")?.let { File(it) }
+val hasKeystore = keystoreFile != null && keystoreFile.exists()
+
+if (hasKeystore) {
+    signingConfigs {
+        create("release") {
+            storeFile = keystoreFile
+            // 密钥库由 openssl pkcs12 -export 生成（无需 JDK），必须显式声明类型，
+            // 否则 AGP 默认按 JKS 读取会失败。
+            storeType = "PKCS12"
+            storePassword = signingProp("KEYSTORE_PASS")
+            keyAlias = signingProp("KEY_ALIAS")
+            keyPassword = signingProp("KEY_PASSWORD")
+        }
+    }
+}
+
+buildTypes {
+    release {
+        // 模板默认关闭 R8 以保证首编通过；需要体积优化时打开并补充 proguard 规则。
+        isMinifyEnabled = false
+        if (hasKeystore) {
+            signingConfig = signingConfigs.getByName("release")
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 配套：文件顶部需要的 import（Gradle Kotlin DSL 只允许 buildscript/plugins 块作头部，
+// 所以 import 写在 plugins {} 之前，其余取值逻辑写在 plugins {} 之后）
+// ---------------------------------------------------------------------------
+// import java.io.File
+// import java.util.Properties
+
+// ---------------------------------------------------------------------------
+// 配套：workflow 侧的 env 映射（Secret 名与上面的变量名不完全一致）
+// ---------------------------------------------------------------------------
+//   - name: Build release APK
+//     env:
+//       KEYSTORE_PATH: ${{ github.workspace }}/keystore.p12   // 不是 Secret
+//       KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASSWORD }}       // 名字不一致，注意
+//       KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+//       KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+//     run: gradle :app:assembleRelease --no-daemon
+
+// ---------------------------------------------------------------------------
+// 配套：本地开发写 local.properties（该文件已在 .gitignore 里）
+// ---------------------------------------------------------------------------
+//   KEYSTORE_PATH=/abs/path/to/release.p12
+//   KEYSTORE_PASS=<口令>
+//   KEY_ALIAS=release
+//   KEY_PASSWORD=<口令>

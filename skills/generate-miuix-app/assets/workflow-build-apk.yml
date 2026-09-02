@@ -1,0 +1,293 @@
+# MIUIX 模板 Release 构建 workflow —— 模板
+#
+# 这是本仓库 .github/workflows/build-apk.yml 在 2026-09-02 的镜像，用作新项目起点。
+# 仓库里那份是权威：两者不一致时以 .github/workflows/build-apk.yml 为准，
+# 并顺手把这里同步过来（漂移的模板比没有模板更糟）。
+#
+# 派生新应用时要改的地方只有两处：
+#   1. smoke job 的 APP_ID —— 必须与 app/build.gradle.kts 的 applicationId 一致
+#   2. AVD 缓存 key —— 换 api-level/profile 时改一下，否则会命中不相干的旧快照
+#
+# 三条硬约束（改坏了不会报错，只会静默不干活）：
+#   - 顶层 permissions: contents: write 不能删，否则创建 Release 403
+#   - secrets.* 不能出现在 step 的 if: 里，否则整个 workflow 解析成 0 个 job
+#   - 构建命令是 gradle 不是 ./gradlew，因为仓库没提交 wrapper jar
+
+name: Build Release APK
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+# 必需：softprops/action-gh-release 要用 GITHUB_TOKEN 创建 Release。
+# 缺省权限只有 read，会返回 403 "Resource not accessible by integration"。
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v6
+        with:
+          distribution: zulu
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      # GitHub 托管 runner 已预装 Android SDK；setup-gradle 已提供与 AGP 9.x 匹配的
+      # Gradle 9.x 并在 PATH 上，直接用 gradle 构建，避免现场生成 8.13 wrapper 造成版本错配。
+      # 注意：secrets 上下文不能出现在 step 的 if: 里（会导致整个 workflow 解析失败）。
+      # 因此在 shell 内部判断密钥是否存在；无密钥时跳过，release 产物为未签名 APK。
+      - name: Decode signing key
+        env:
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+        run: |
+          if [ -n "$SIGNING_KEY" ]; then
+            echo "$SIGNING_KEY" | base64 -d > "$GITHUB_WORKSPACE/keystore.p12"
+            echo "已写入 keystore.p12（PKCS12）"
+          else
+            echo "未配置 SIGNING_KEY，跳过签名，产物为 app-release-unsigned.apk"
+          fi
+
+      # KEYSTORE_PASS 对应 Secret KEYSTORE_PASSWORD —— 名字不一致是有意的，别改错边。
+      - name: Build release APK
+        env:
+          KEYSTORE_PATH: ${{ github.workspace }}/keystore.p12
+          KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: gradle :app:assembleRelease --no-daemon
+
+      # 签名没生效就直接让 CI 失败，避免把装不上的 unsigned 包发到 Release 页上。
+      - name: Verify APK signature
+        run: |
+          APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          echo "产物: $APK"
+          case "$APK" in
+            *unsigned*) echo "!! 产物未签名，签名 Secrets 未生效"; exit 1;;
+          esac
+          AS=$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)
+          [ -n "$AS" ] || AS=$(find /usr/local/lib/android/sdk -name apksigner -type f 2>/dev/null | sort -V | tail -1)
+          [ -n "$AS" ] || { echo "找不到 apksigner"; exit 1; }
+          "$AS" verify --verbose --print-certs "$APK"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: app-release-apk
+          path: app/build/outputs/apk/release/*.apk
+
+      # 仅当以 v* tag 触发时创建 GitHub Release 并附上 APK。
+      # v3 相比 v2 主要是运行时升到 node24 并规范化 tag_name 输入；generate_release_notes
+      # 让 GitHub 按提交历史自动写正文，省掉手工维护 changelog。
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v3
+        with:
+          files: app/build/outputs/apk/release/*.apk
+          generate_release_notes: true
+
+  # 运行时冒烟：签名校验只证明「这个包是合法的」，不证明「装得上、起得来、不闪退」。
+  # 本 job 在真头模拟器上安装 build 产出的同一个 APK 并拉起 MainActivity。
+  #
+  # 与 Release 的取舍（有意为之）：Create GitHub Release 是 build job 的最后一步，
+  # smoke 通过 needs: build 排在它后面，所以冒烟失败时 Release 已经发出去了。
+  # 这样做的理由是：APK 已经过 apksigner 校验，冒烟挂了通常是「运行环境/渲染」问题，
+  # 不该把用户已经能下载的 Release 一起拖回未发布状态；但 smoke job 本身必须红，
+  # 让页面上留下明确的失败信号。若哪天改成「冒烟不过就不发版」，把那个 Release 步骤
+  # 挪进一个 needs: [build, smoke] 的 publish job 即可，这里先不做。
+  smoke:
+    name: Smoke test on emulator
+    needs: build
+    runs-on: ubuntu-latest
+    # 无头模拟器最容易卡死（等不到 boot_completed），给一个远短于默认 360min 的上限。
+    timeout-minutes: 45
+    # 冒烟只读代码 + 下载 artifact，不需要写权限（artifact 走独立的运行时 token）。
+    permissions:
+      contents: read
+    env:
+      # 与 app/build.gradle.kts 的 applicationId 一致；改包名时这里要跟着改。
+      APP_ID: top.yukonga.miuixapptemplate
+      OUT_DIR: smoke-out
+
+    steps:
+      - name: Enable KVM group perms
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v6
+        with:
+          distribution: zulu
+          java-version: "21"
+
+      - name: Download release APK
+        uses: actions/download-artifact@v8
+        with:
+          name: app-release-apk
+          path: smoke-apk
+
+      # 拆成 restore/save 两步而不是单个 actions/cache：cache@v6 的 post 步骤带
+      # post-if: success()，冒烟一挂就不会保存快照——而首次跑恰恰是最贵的一次
+      # （要下 ~1GB system image 并冷启动生成快照），失败了也得把快照存下来。
+      - name: Restore AVD snapshot
+        id: avd-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: avd-34-google_apis-x86_64-pixel_7_pro
+
+      # 缓存未命中时先跑一次「只开机不测」的模拟器生成快照。
+      # emulator-options 里不带 -no-snapshot，退出时才会保存快照；
+      # 下一步再带 -no-snapshot-save，从快照启动但不覆盖它。
+      - name: Create AVD and generate snapshot
+        if: steps.avd-cache.outputs.cache-hit != 'true'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_7_pro
+          cores: 2
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: false
+          script: echo "已生成 AVD 快照用于缓存"
+
+      # 冒烟逻辑写成独立脚本文件，而不是直接塞进 action 的 script: 输入。
+      # 原因见 android-emulator-runner 的 src/script-parser.ts：script 会被
+      # 按行拆成数组，每行单独跑一次 sh -c —— 跨行的 if/fi、case、变量全部失效。
+      # 所以 script: 这里只能放一行调用。
+      - name: Write smoke script
+        run: |
+          cat > "$RUNNER_TEMP/smoke.sh" <<'SMOKE_EOF'
+          #!/usr/bin/env bash
+          # 安装 → 拉起 → 等渲染 → 截图 → 查崩溃。全程只收集证据，最后统一判定，
+          # 这样即使中途失败，artifact 里也有完整的现场可供排查。
+          ADB="$(command -v adb || echo "$ANDROID_HOME/platform-tools/adb")"
+          APK="$(find smoke-apk -name '*.apk' -type f | head -1)"
+
+          if [ -z "$APK" ]; then
+            echo "!! smoke-apk/ 下没有找到 APK，artifact 可能没上传成功"
+            exit 1
+          fi
+          echo "冒烟对象: $APK"
+          mkdir -p "$OUT_DIR"
+          FAIL=0
+
+          # 先清空 logcat：崩溃断言的窗口只覆盖「安装→启动→渲染」这段，
+          # 不把模拟器开机时其它系统进程的噪音算进来。
+          "$ADB" logcat -c
+
+          "$ADB" install -r -g "$APK" > "$OUT_DIR/install.log" 2>&1
+          INSTALL_RC=$?
+          cat "$OUT_DIR/install.log"
+          if [ "$INSTALL_RC" -ne 0 ] || ! grep -qi "Success" "$OUT_DIR/install.log"; then
+            echo "!! 安装失败（装不上）"; FAIL=1
+          fi
+
+          # -W 让 am 等到 activity 启动完成再返回，并打印 Status / TotalTime。
+          "$ADB" shell am start -W -n "$APP_ID/$APP_ID.MainActivity" > "$OUT_DIR/am-start.log" 2>&1
+          START_RC=$?
+          cat "$OUT_DIR/am-start.log"
+          if [ "$START_RC" -ne 0 ] || ! grep -qi "Status: ok" "$OUT_DIR/am-start.log"; then
+            echo "!! am start 未返回 Status: ok（起不来）"; FAIL=1
+          fi
+
+          # Compose 首帧 + 模糊层建立需要一点时间，等它稳定后再取证。
+          sleep 8
+
+          # 只截图不判像素：文件非空即认为「画面出来了」。
+          "$ADB" exec-out screencap -p > "$OUT_DIR/screen.png"
+          if [ -s "$OUT_DIR/screen.png" ]; then
+            echo "截图: $OUT_DIR/screen.png ($(wc -c < "$OUT_DIR/screen.png") bytes)"
+          else
+            echo "!! screencap 输出为空"; FAIL=1
+          fi
+
+          # 进程还在 = 没有启动即闪退；pidof 为空则基本是崩了或被系统杀掉。
+          PID="$("$ADB" shell pidof "$APP_ID" | tr -d '\r')"
+          if [ -n "$PID" ]; then
+            echo "进程存活，pid=$PID"
+          else
+            echo "!! 启动后进程不存在（疑似闪退）"; FAIL=1
+          fi
+
+          # 前台 activity 仅作观测，不参与判定：dumpsys 字段格式随版本变化，
+          # 拿它当硬断言容易造成假失败。
+          "$ADB" shell dumpsys activity activities > "$OUT_DIR/dumpsys-activities.txt" 2>&1 || true
+          grep -m 5 "$APP_ID" "$OUT_DIR/dumpsys-activities.txt" || echo "（dumpsys 中未匹配到包名，仅记录）"
+
+          "$ADB" logcat -d -v time > "$OUT_DIR/logcat.txt" 2>&1 || true
+          "$ADB" logcat -d -b crash > "$OUT_DIR/logcat-crash.txt" 2>&1 || true
+
+          # 因为前面 logcat -c 过，这个窗口里出现的 FATAL / native crash / ANR
+          # 几乎只可能来自本应用，宁可误报也不放过真闪退。
+          # 同时匹配 -v time 的 "E/AndroidRuntime" 和 threadtime 的 "E AndroidRuntime"。
+          CRASH="$(grep -nE 'FATAL EXCEPTION|Fatal signal|ANR in |E/AndroidRuntime|E AndroidRuntime' "$OUT_DIR/logcat.txt" || true)"
+          if [ -n "$CRASH" ]; then
+            echo "!! logcat 命中崩溃/ANR 特征："
+            echo "$CRASH" | head -40
+            FAIL=1
+          fi
+
+          if [ "$FAIL" -ne 0 ]; then
+            echo "!! 冒烟未通过，证据见 smoke-evidence artifact"
+            exit 1
+          fi
+          echo "冒烟通过：安装成功、activity 启动、进程存活、无崩溃"
+          SMOKE_EOF
+          chmod +x "$RUNNER_TEMP/smoke.sh"
+
+      # api-level 取 34：本项目 minSdk 24，但 miuix-blur 在 Android 上要求 33
+      # （manifest 里靠 tools:overrideLibrary 才过了合并检查），低于 33 根本走不到
+      # 液态玻璃那条渲染路径，冒烟就没意义。34 也避开了 35 起的 16KB 页镜像变体。
+      # arch 必须显式写 x86_64：该 action 默认 x86，而 android-34 已不再提供 x86 镜像
+      # （Google 的 sys-img 清单里 android-34 只有 x86_64 和 arm64-v8a）。
+      #
+      # 关于截图：-gpu swiftshader_indirect 是软件光栅化，RenderEffect 模糊的质感、
+      # 折射与真机 GPU 差异很大。所以 screen.png 只能用来断言「画没画出来 / 有没有崩」，
+      # 不能当像素级视觉基线，也不要拿它做 diff 比对。
+      - name: Install, launch and capture
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_7_pro
+          cores: 2
+          force-avd-creation: false
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: bash "$RUNNER_TEMP/smoke.sh"
+
+      # 无论成败都留证据：失败时这几份文件就是排查的全部依据。
+      - name: Upload smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: smoke-evidence
+          path: smoke-out/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Save AVD snapshot
+        if: always() && steps.avd-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: ${{ steps.avd-cache.outputs.cache-primary-key }}

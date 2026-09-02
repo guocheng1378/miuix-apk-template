@@ -1,0 +1,24 @@
+{
+  "name": "generate-miuix-app",
+  "displayName": "Generate MIUIX App",
+  "version": "1.0.0",
+  "description": "生成或改造 MIUIX 风格的 Android APK 工程（Compose Multiplatform + miuix），含液态玻璃底栏、页面栈导航、主题持久化、PKCS12 签名与 GitHub Actions 构建。",
+  "author": {
+    "name": "guocheng1378",
+    "url": "https://github.com/guocheng1378"
+  },
+  "homepage": "https://github.com/guocheng1378/miuix-apk-template",
+  "repository": "https://github.com/guocheng1378/miuix-apk-template",
+  "keywords": [
+    "miuix",
+    "android",
+    "compose-multiplatform",
+    "kotlin-multiplatform",
+    "apk",
+    "liquid-glass",
+    "github-actions"
+  ],
+  "skills": [
+    "./skills/generate-miuix-app"
+  ]
+}
