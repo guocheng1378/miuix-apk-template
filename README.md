@@ -6,8 +6,8 @@
 
 > 本机**无需**安装 JDK / Android SDK；构建与签名全部在 GitHub Actions（自带 JDK 21 + Android SDK，并由 `setup-gradle` 提供 Gradle）完成。
 
-**当前状态**：签名发布链路**已跑通**——本仓库已配置正式签名 Secrets，`v1.0.2` 已作为**已签名** Release 发布（APK Signature Scheme v2，可直接下载安装），见[已发布版本与产物校验](#已发布版本与产物校验)。
-测试体系**仍在补齐**：仓库目前没有任何自动化测试，CI 只做编译 + `apksigner` 签名校验，尚无运行时验证，见[测试与验证现状](#测试与验证现状)。
+**当前状态**：签名发布链路**已跑通**——本仓库已配置正式签名 Secrets，最新已签名 Release 为 `v1.0.4`（APK Signature Scheme v2，可直接下载安装），见[已发布版本与产物校验](#已发布版本与产物校验)。
+测试体系**已就位三套**且目前**全绿**：① emulator 冒烟（CI 模拟器安装启动 App，抓原生崩溃）；② JVM 截图回归（Robolectric 渲染预览，只扫不含 AGSL 的 `preview.settings` 包）；③ 依赖审查。详见[测试与验证现状](#测试与验证现状)。
 
 ## 能力清单（代码里实际有的）
 
@@ -154,6 +154,7 @@ base64 -w0 release.keystore
 
 | tag | versionName / versionCode | Release 资产 | 状态 |
 |---|---|---|---|
+| [`v1.0.3`](https://github.com/guocheng1378/miuix-apk-template/releases/tag/v1.0.3) | `1.0.3` / `3` | `app-release.apk` | ⚠️ **已被取代**：APK 在模拟器上首帧 SIGSEGV 崩溃（RenderNode 环，见[测试与验证现状](#测试与验证现状)）。请勿安装，直接用 `v1.0.4` |
 | [`v1.0.2`](https://github.com/guocheng1378/miuix-apk-template/releases/tag/v1.0.2) | `1.0.2` / `2` | `app-release.apk`（9306061 字节 ≈ 8.87 MB） | **已签名，可直接下载安装** |
 | `v1.0.1` | — | 无 APK 资产（只有 source zip/tar.gz） | 签名链路启用前的构建 |
 
@@ -181,19 +182,24 @@ apksigner verify --verbose --print-certs app-release.apk
 
 ## 测试与验证现状
 
-**仓库目前没有任何自动化测试**：没有 `test/` / `androidTest/` 源码集，没有单元测试、没有 Compose UI 测试、没有截图基线。CI（`.github/workflows/build-apk.yml`）只有两步实质性验证——
+CI 目前跑**三套**工作流，结论均基于 GitHub Actions 真实产物（非静态推断）：
 
-1. `gradle :app:assembleRelease --no-daemon`：只能证明**编译通过**；
-2. **Verify APK signature**（文件名含 `unsigned` 即失败 + `apksigner verify`）：只能证明**签名正确**，完全不碰运行时。
+1. **构建 + emulator 冒烟**（`build-apk.yml`，`push: tags: v*` / `workflow_dispatch`）：`gradle :app:assembleRelease` 编译通过后，在 CI 模拟器里 `adb install` 并启动 `MainActivity`，截一张图、抓 logcat，确认**不崩溃、进程还在**。`v1.0.4` 这轮冒烟**首次真实抓到并修复了一个首帧 native 崩溃**（见下）。
+2. **JVM 截图回归**（`test.yml`，`push` / `pull_request`）：Robolectric + layoutlib 渲染预览、落 PNG。只扫 `preview.settings` 包（见下「AGSL 限制」），目前产出 `SettingsPageLight` / `SettingsPageDark` 两张图，全绿。
+3. **依赖审查**（`dependency-review.yml`，PR / master）：GitHub Dependency Review Action 逐依赖比对，全绿。
 
-也就是说，**没有任何一步真正安装并驱动过这个 App**。
+### AGSL 限制（为什么截图回归不扫全部预览）
 
-正在补齐（本轮改动，尚未全部落地，别当成已完成）：
+miuix 的 `miuix-squircle`（`Card` / `squircleSurface`）与 `miuix-blur`（液态底栏）的 AGSL 着色器用了 `layout(color)` 限定符，而 Robolectric 的内嵌 Skia 不认它，构造 `RuntimeShader` 即抛 `IllegalArgumentException("error: 'color' is not a valid layout qualifier")`。所以含这些路径的预览（液态底栏 / HomePage 的 Card / 整棵 App）**不能进 JVM 扫描**，放在 `preview` 包里由 emulator 冒烟 job 覆盖；只有 `SettingsPage`（纯 miuix-preference，无 AGSL）放在 `preview.settings` 包被截图回归扫描。这是 Robolectric 的能力边界，不是 app 问题。
 
-- **预览截图回归**：把界面渲染成图与基线比对，防止 UI 改版悄悄跑偏；
-- **模拟器冒烟**：在 CI 里起模拟器安装并启动 Activity，检查不崩溃。
+### 已修：首帧 native 崩溃（RenderNode 环）
 
-**仍未执行**：真机运行时冒烟（`adb install` 后逐页操作）。开发环境没有 JDK / Android SDK / adb / 设备，所以「装得上、点得动、真机上液态玻璃是什么观感」目前**没有任何验证记录**，只有静态编译与签名层面的证据。
+`v1.0.3` 的 APK 在 Android 模拟器上**首帧即 SIGSEGV 崩溃**，解栈是 512 层 `RenderNode::prepareTreeImpl` 递归。根因：`backdrop` 实例既挂在 `HomePage`/`DetailPage` 的 `Column` 上 `layerBackdrop` 注册，又被这些 `Column` 后代里的 `LiquidButton` 用 `textureBlur` 采样——**采样者是注册者的后代、且用同一实例**，hwui `drawRenderNode` 自引用成环。修复：页面内容只在 `Scaffold` content 槽统一注册一次；页面内按钮改用独立 `buttonBackdrop` 实例，注册在纯装饰背景兄弟层。`v1.0.4` 起已修复（冒烟通过）。机制与判据见 `skills/generate-miuix-app/references/pitfalls.md` G1 / G3。
+
+### 仍未执行
+
+- **真机逐页手感**：手势返回、下拉刷新手感、左滑删除阈值、液态玻璃在真机的实际观感，仍没有人工/自动化记录（开发环境只有 CI 模拟器，没有真机）。
+- **GitHub 报的 47 个依赖漏洞**：全部是 Gradle 插件 / Robolectric 等**构建与测试期**传递依赖（netty、bouncycastle、jose4j 等），**不进 Release APK**（已解包核对：APK 只含 okhttp / coil / miuix / compose 等运行时依赖）。升级需动 Gradle / Kotlin / AGP 版本，会冲掉整套已验证版本矩阵，暂不动。
 
 ## 限制与未验证项
 
