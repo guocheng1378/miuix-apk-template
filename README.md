@@ -233,7 +233,7 @@ miuix 的 `miuix-squircle`（`Card` / `squircleSurface`）与 `miuix-blur`（液
 ### 仍未执行
 
 - **真机逐页手感**：手势返回、下拉刷新手感、左滑删除阈值、液态玻璃在真机的实际观感，仍没有人工/自动化记录（开发环境只有 CI 模拟器，没有真机）。
-- **设置页 / 详情页的大标题折叠接线**：`App.kt` 里这两页补上的 `.nestedScroll(scrollBehavior.nestedScrollConnection)`（以及详情页为保证可滚补的说明卡）**尚未经过编译与截图验证**——本仓库的开发环境没有 JDK / Android SDK / Gradle，改动只做了源码级核对（API 名与形参照着 miuix `0.9.4-rc01` sources jar 逐条确认）。下一次 CI 跑绿之前，这条算"已改未验"。
+- **大标题折叠「到底折不折」仍未验**：`App.kt` 给设置页/详情页补的 `.nestedScroll(scrollBehavior.nestedScrollConnection)` **已过 CI 编译验证**（`3ab3b30` 那轮 `:shared:compileAndroidMain` 非缓存执行、`BUILD SUCCESSFUL`），设置页也被 `preview.settings` 的两张截图真实渲染过。但那两张预览传的是一个**临时的** `MiuixScrollBehavior()`、没有配对的 `TopAppBar`，所以只证明「修饰符链不炸」，**不证明滚动时大标题真的折叠**；详情页没有任何预览覆盖（`Card` 走 AGSL，进不了 JVM 扫描）。折叠手感仍要靠真机/模拟器手动确认。
 - **GitHub 报的 47 个依赖漏洞**：全部是 Gradle 插件 / Robolectric 等**构建与测试期**传递依赖（netty、bouncycastle、jose4j 等），**不进 Release APK**（已解包核对：APK 只含 okhttp / coil / miuix / compose 等运行时依赖）。升级需动 Gradle / Kotlin / AGP 版本，会冲掉整套已验证版本矩阵，暂不动。
 
 ## 限制与未验证项
