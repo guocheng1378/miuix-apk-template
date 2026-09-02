@@ -1,6 +1,6 @@
 # MIUIX 0.9.4-rc01 API 实测清单
 
-下面的 import 路径与签名全部从本仓库 `App.kt`（672 行）的实际 import 与调用点抄出，
+下面的 import 路径与签名全部从本仓库 `App.kt`（738 行）的实际 import 与调用点抄出，
 不是凭记忆写的。API 有疑义时按 `verification.md` 的四级核验法回到 sources jar 确认。
 
 ## import 路径速查
@@ -77,6 +77,30 @@ val backdrop = if (isRuntimeShaderSupported()) rememberLayerBackdrop() else null
 `isRuntimeShaderSupported()` 为假（Android 12 以下）时 `backdrop == null`，
 **必须**降级为纯色 / squircle 并在 UI 上给提示。工程 `minSdk = 24` 而 blur 模块要求 33，
 靠 Manifest 的 `tools:overrideLibrary` 放行，所以低版本真机是能装上的——降级分支不是可选项。
+
+### 接线规则（违反即首帧 native 崩溃）
+
+`layerBackdrop` 是**录制**（把当前节点整棵子树录进一个 `RenderNode`），
+`textureBlur`/`drawBackdrop` 是**重放**（`drawRenderNode` 建立真实父子边）。因此：
+
+> **采样者 `N` 落在注册者 `M` 的子树内、且两者用同一个 `LayerBackdrop` 实例 ⇒ RenderNode
+> 成环 ⇒ hwui `prepareTree` 无限递归 ⇒ 首帧 SIGSEGV。** 崩溃日志里一帧 Kotlin 都没有，
+> 全是 512 层 `RenderNode::prepareTreeImpl`，极易误判成 GPU/模拟器问题。
+
+- **一个实例只允许一个注册点**。`LayerBackdrop` 只有单个 `graphicsLayer` 和单个
+  `layerCoordinates`，多处注册是静默的后写覆盖（`NavDisplay` 转场期两个 entry 同时存活
+  会踩到），表现为采样错位/闪烁。
+- 标准安全拓扑：**content 槽注册，`bottomBar` 槽采样**——miuix `Scaffold` 的
+  `topBar`/`bottomBar`/content 是同一布局节点下独立的 `subcompose` 兄弟子节点。
+- 页面内部想要玻璃元素（按钮等），**另起一个独立实例**并注册在纯装饰的**背景兄弟层**上
+  （`Box(Modifier.matchParentSize().layerBackdrop(b))` + 子树内无任何消费者），
+  本模板的 `buttonBackdrop` / `LiquidButtonBackdropLayer` 就是这个形状。
+- 同一节点 `.layerBackdrop(X)` + `.drawBackdrop(Y)` 且 `X ≠ Y` 合法，上游
+  `LiquidGlassNavigationBar` 自己就这么用。
+- 多个消费者共享同一个被录制层是 DAG，无害。
+
+完整机制与源码行号见 `pitfalls.md` G1；这条**静态 grep 判不出来**（祖先/后代是布局树
+属性），只能靠 `build-apk.yml` 的 emulator 冒烟 job 兜。
 
 底栏模糊实测参数：
 

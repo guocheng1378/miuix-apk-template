@@ -79,7 +79,116 @@
 - release 的 `isMinifyEnabled = false`。开混淆前要先补 proguard 规则（miuix/Coil 有反射点），
   否则表现为运行期 `ClassNotFoundException` 而不是编译错误。
 
-## G. 凭证
+## G. 运行时崩溃（native，无 Java 堆栈）
+
+### G1. backdrop 采样成环 → 首帧 SIGSEGV（`prepareTreeImpl` 递归 512 层）
+
+**症状**：App 起来几秒就没了，`adb logcat` 里**没有** Java 异常，只有
+
+```
+F/libc: Fatal signal 11 (SIGSEGV), code 2 (SEGV_ACCERR) in tid N (RenderThread)
+F DEBUG : Cause: stack pointer is not in a rw map; likely due to stack overflow.
+F DEBUG : 512 total frames
+F DEBUG : #00 libhwui.so android::uirenderer::RenderNode::prepareTreeImpl(...)+23
+F DEBUG : #01 libhwui.so ...prepareTreeImpl(...)::$_0...operator()
+F DEBUG : #02 libhwui.so android::uirenderer::RenderNode::prepareTreeImpl(...)+12020
+（#00/#01/#02 两两交替直到 512）
+```
+
+backtrace 里**一帧 Kotlin/Compose 都没有**，全是 `libhwui.so`。看着像 GPU/模拟器问题，其实不是。
+
+**机制**（逐字核对 `miuix-blur:0.9.4-rc01` 源码）：
+
+- `Modifier.layerBackdrop(b)`（`LayerBackdropModifier.kt:58-61`）在 `draw()` 里做
+  `drawContent()` + `recordLayer(b.graphicsLayer) { b.onDraw(this) }`，默认 `onDraw`
+  就是 `drawContent()`（`LayerBackdrop.kt:26`）。即**把当前节点整棵子树的绘制指令录进
+  `b.graphicsLayer`**。Android 上 `GraphicsLayer` 的 actual 是 `GraphicsLayerV29`，
+  构造即 `RenderNode("graphicsLayer")`。
+- `Modifier.drawBackdrop(b)` / `Modifier.textureBlur(b)` 最终走到 `LayerBackdrop.kt:111`
+  的 `drawLayer(graphicsLayer)` → `canvas.nativeCanvas.drawRenderNode(renderNode)`。
+  **这不是读像素、不是缓存 bitmap，而是重放那个 RenderNode，会在 hwui 的 RenderNode
+  父子图里建立一条真实的父子边。**
+- 消费者节点带 `clip = true` + `CompositingStrategy.Offscreen`（`DrawBackdropModifier.kt:356-360`），
+  必然拥有自己的 RenderNode，没有「被优化掉所以不成环」的余地。
+
+**判据（记牢）**：
+
+> 设 `M` = 挂 `.layerBackdrop(b)` 的节点，`N` = 挂 `.drawBackdrop(b)` / `.textureBlur(b)`
+> 的节点。**当且仅当 `N` 落在 `M` 的子树内（`N === M` 或 `N` 是 `M` 的后代）且两者用
+> 同一个 backdrop 实例时，成环。**
+
+链路：`R(N)` 的 display list 含 `drawRenderNode(L(b))`；`L(b)` 含 `R(M)` 子树的重放；
+`N` 在 `M` 子树内 ⇒ `L(b) → … → R(N) → L(b)` 闭合 → prepareTree 无限递归 → 栈溢出。
+
+**安全条件（任一即可）**：
+
+- `N` 是 `M` 的**兄弟或旁支**。`Scaffold` 的 `bottomBar` 槽与 `content` 槽是两个独立
+  `subcompose` 子节点（`Scaffold.kt:181-182, 251-252`），所以「content 注册、bottomBar
+  采样」是官方标准接法，安全。
+- `M` 是**只画背景的叶子层**（`Spacer` / `matchParentSize` 的 Box），其子树里没有消费者。
+- 同一节点 `.layerBackdrop(X)` + `.drawBackdrop(Y)` 且 **`X ≠ Y`** 合法——上游
+  `LiquidGlassNavigationBar.kt:469-477` 自己就这么写（X 的录制子树里没有绘制 X 的节点）。
+- 多个**消费者**共享同一个 `GraphicsLayer` 是 DAG，无害。
+
+**本仓库真实踩过的坑**：唯一的 `backdrop` 实例既挂在 `HomePage`/`DetailPage` 的 `Column`
+上注册，又被这些 `Column` 后代里的 `LiquidButton` 用 `textureBlur` 采样 → 单节点自环，
+`HomePage` 首次组合即崩。修法：页面内容只在 `Scaffold` content 槽注册一次，页面内的按钮
+改用**另一个独立的** `rememberLayerBackdrop()` 实例，注册在纯装饰的背景兄弟层上。
+
+**顺带一条**：同一个 `LayerBackdrop` 实例被多个节点同时 `.layerBackdrop()` 注册**不被支持**
+且是**静默覆盖**——`LayerBackdrop` 只有单个 `graphicsLayer` val 和单个 `layerCoordinates`
+var，全类没有多源集合。`NavDisplay` 转场期间两个 entry 同时存活时，后录者覆盖前者的
+display list 与坐标，表现为采样错位/闪烁（不成环，但结果不对）。所以**一个 backdrop 实例
+只允许一个注册点**。
+
+### G2. 为什么静态检查抓不到 G1
+
+祖先/后代关系是**布局树**属性，grep 判不出来。文本层能确认的只有「同一实例既注册又采样」
+这个必要条件，而它既会漏（写成 `backdrop?.let { Modifier.layerBackdrop(it) }` 时变量名
+根本不出现，正则匹配不到 → 静默通过）也会误报（bottomBar 那种合法接法长得一模一样）。
+`preflight.sh` 因此**故意不加**这条检查——一个会静默通过的检查比没有检查更糟。
+G1 只能靠 emulator 冒烟 job 抓（见 `references/ci-workflow.md`）。
+
+### G3. Robolectric 无法渲染 miuix 的 squircle / blur AGSL —— 含这些路径的预览不能进 JVM 截图扫描
+
+**症状**：`generateComposePreviewRobolectricTests` 跑起来，凡是经过下面任一条路径的预览
+（本仓库 8 条里 6 条）全部 `FAILED`，异常是
+
+```
+Caused by: java.lang.IllegalArgumentException: error: 2: 'color' is not a valid layout qualifier
+    at org.robolectric.nativeruntime.RuntimeShaderNatives.nativeCreateBuilder(Native Method)
+    at top.yukonga.miuix.kmp.shader.RuntimeShader_androidKt.RuntimeShader(...)
+    at top.yukonga.miuix.kmp.squircle.SquircleShaderBrush.<init>(SquircleBackground.kt:392)   # Card / squircleSurface
+    at top.yukonga.miuix.kmp.blur.RuntimeShaderKt.RuntimeShader(...)
+    at component.animation.InteractiveHighlight.<init>(InteractiveHighlight.kt:41)            # 液态底栏
+```
+
+**根因**：miuix 的 `miuix-squircle`（`SquircleShaderBrush`）与 `miuix-blur`（`InteractiveHighlight`
+等）的 AGSL 着色器用了 `layout(color)` 输出限定符。Robolectric 4.14.1 的
+`ShadowNativeRuntimeShader` 内嵌的 Skia 版本**不认这个限定符**，在 `RuntimeShader`
+**构造阶段**就抛 `IllegalArgumentException`。所以这不是「渲染错」，是「着色器根本编译不过」——
+而且与是否真的执行模糊无关：哪怕传 `backdrop = null` 走回退分支，`IosLiquidGlassNavigationBar`
+内部仍会**无条件**构造 `InteractiveHighlight` 的着色器，照样炸。
+
+**哪些预览会炸**：任何经过 `Card`（miuix-squircle）/ `squircleSurface` 或 `IosLiquidGlassNavigationBar`
+（blur）的预览。`SettingsPage` 只用 `RadioButtonPreference` / `SwitchPreference`（无 AGSL），
+所以在 Robolectric 下能正常光栅化——这是本仓库里唯一能进 JVM 截图扫描的预览组。
+
+**为什么不能靠改 SDK / 关 NATIVE 解决**：roborazzi 生成的测试默认 `@Config(sdk = ["[33]"])`，
+改 sdk 会让 `isRuntimeShaderSupported()` 整段不执行或违反 miuix-blur 的 minSdk 33；
+关掉 `@GraphicsMode(NATIVE)` 走 LEGACY 只是把着色器当空操作，产出的 golden 是错的，
+而且 miuix 仍可能在别处构造着色器。这层限制只能绕，不能修。
+
+**本仓库的解法**：把预览按「JVM 能不能渲染」拆成两个包——
+- `preview.settings`：只放 `SettingsPageLight/Dark`（无 AGSL），`shared/build.gradle.kts`
+  里 `roborazzi { packages = listOf("preview.settings") }` 只扫这个包，JVM 截图回归稳定绿；
+- `preview`：放液态底栏 / HomePage / 整 App 这些 device-only 预览，由 `build-apk.yml` 的
+  emulator 冒烟 job 验证能启动和渲染（同一套代码在真机/模拟器上没问题）。
+
+**迭代新模板时**：凡是画面里用了 `Card`、`squircleSurface`、液态玻璃组件的预览，都不要指望
+JVM 截图回归能跑——把它们放进 emulator 冒烟，或干脆不写 `@Preview` 让 JVM 扫描。
+
+## H. 凭证
 
 - 用户提供的 PAT 明文出现在对话里 → 交付后立即建议撤销。
 - 一次性 `git remote add` + `push` 之后，必须

@@ -54,6 +54,15 @@ metadata:
 9. **仓库是 public 时绝不把 keystore 当 workflow artifact 上传**——artifact 可被任何持 token 者下载，等于泄露私钥。只走 Secrets。
 10. **PyNaCl 用 `public.SealedBox`，不是 `Box`**。GitHub Secrets 加密方案是 sealed box。
 11. **绝不回显用户提供的 token**；PAT 明文出现在对话里就建议其立即撤销。
+12. **一个 `LayerBackdrop` 实例只能有一个注册点，且采样者不得是注册点的后代**。
+    `Modifier.layerBackdrop(b)` 把当前节点整棵子树录进 `b.graphicsLayer`（Android 上就是
+    一个 `RenderNode`），`textureBlur`/`drawBackdrop` 用 `drawRenderNode` 重放它、建立真实
+    父子边。若采样者 `N` 落在注册者 `M` 的子树内且用同一个 `b`，RenderNode 图成环 →
+    **首帧 SIGSEGV，backtrace 是 512 层 `RenderNode::prepareTreeImpl` 且一帧 Kotlin 都没有**。
+    安全接法：content 槽注册、`bottomBar` 槽采样（两者是 Scaffold 的兄弟槽位）；页面内的
+    玻璃元素另起独立 `rememberLayerBackdrop()` 实例并注册在纯装饰背景兄弟层上。
+    这条**静态检查抓不到**（祖先/后代是布局树属性），只能靠 emulator 冒烟 job 兜。
+    详见 `references/pitfalls.md` G1。
 
 ## 版本矩阵（CI 端到端编译验证过的组合，非推测）
 
