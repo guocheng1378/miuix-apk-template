@@ -219,10 +219,31 @@ jobs:
           "$ADB" logcat -d -v time > "$OUT_DIR/logcat.txt" 2>&1 || true
           "$ADB" logcat -d -b crash > "$OUT_DIR/logcat-crash.txt" 2>&1 || true
 
-          # 因为前面 logcat -c 过，这个窗口里出现的 FATAL / native crash / ANR
-          # 几乎只可能来自本应用，宁可误报也不放过真闪退。
+          # 崩溃断言必须按归属过滤。logcat -c 只清掉了本 app 启动前的噪音，但窗口内
+          # 其它进程照样会崩：run#14 就是被 nexuslauncher 的一条 ANR 判红的（当时 app
+          # 安装成功、冷启 3.6s、进程存活），而同一 commit 的 run#13 是绿的——全 logcat
+          # 通配等于把整机的事故算到本包头上，属于随机 flake。
+          # 归属判定取三种形态，命中任一即算本 app：本行带包名（ANR in <pkg>）、下一行
+          # 带 "Process: <pkg>"（FATAL EXCEPTION 的惯例）、tag 括号里的 pid 属于本 app。
           # 同时匹配 -v time 的 "E/AndroidRuntime" 和 threadtime 的 "E AndroidRuntime"。
-          CRASH="$(grep -nE 'FATAL EXCEPTION|Fatal signal|ANR in |E/AndroidRuntime|E AndroidRuntime' "$OUT_DIR/logcat.txt" || true)"
+          # 已知盲区：native crash 的 "Fatal signal" 行不带包名、pid 也随进程消失，这种
+          # 情况会漏判；但那时上面的 pidof 检查必然为空并已 FAIL，不会因此放走真闪退。
+          CRASH="$(awk -v app="$APP_ID" -v pids="$PID" '
+            BEGIN { np = split(pids, pid, " ") }
+            { line[NR] = $0 }
+            END {
+              for (i = 1; i <= NR; i++) {
+                s = line[i]
+                if (s !~ /FATAL EXCEPTION|Fatal signal|ANR in |E\/AndroidRuntime|E AndroidRuntime/) continue
+                own = index(s, app) > 0 || index(line[i + 1], "Process: " app) > 0
+                if (match(s, /\([ ]*[0-9]+\)/)) {
+                  p = substr(s, RSTART + 1, RLENGTH - 2)
+                  gsub(/[^0-9]/, "", p)
+                  if (p != "") { for (k = 1; k <= np; k++) if (pid[k] == p) own = 1 }
+                }
+                if (own) printf "%d: %s\n", i, s
+              }
+            }' "$OUT_DIR/logcat.txt" || true)"
           if [ -n "$CRASH" ]; then
             echo "!! logcat 命中崩溃/ANR 特征："
             echo "$CRASH" | head -40
