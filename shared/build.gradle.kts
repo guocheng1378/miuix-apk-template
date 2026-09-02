@@ -77,8 +77,11 @@ kotlin {
         getByName("androidHostTest") {
             dependencies {
                 implementation("junit:junit:4.13.2")
-                // 4.14.1 起 shadows-framework 带 ShadowNativeRuntimeShader / ShadowNativeRenderEffect，
-                // 是 @GraphicsMode(NATIVE) 下能跑 miuix AGSL 着色器的前提。
+                // Robolectric 4.14.1 提供 ShadowNativeRuntimeShader / ShadowNativeRenderEffect，
+                // 让 @GraphicsMode(NATIVE) 能真正走 RuntimeShader 路径；但内嵌的 Skia 仍不认
+                // AGSL 的 `layout(color)` 限定符，miuix 的 squircle/blur 着色器在它下面会构造即抛
+                // IllegalArgumentException——所以带 AGSL 的预览由 emulator 冒烟 job 覆盖，本 test 源集只
+                // 扫 preview.settings（见上方 roborazzi { packages } 注释）。
                 implementation("org.robolectric:robolectric:4.14.1")
                 // 扫描 @Preview 的引擎。用 :android 而非 :common —— CPS 的 :common 硬编码旧包名
                 // com.android.tools.idea.compose.preview 且 0.10.0 已移除，用了会一个预览都扫不到。
@@ -100,8 +103,18 @@ kotlin {
 roborazzi {
     generateComposePreviewRobolectricTests {
         enable = true
-        // 只扫自建预览包，避免把 miuix / coil 等依赖自带的 @Preview 也生成成 golden。
-        packages = listOf("preview")
+        // 只扫 preview.settings 包：里面只有 SettingsPageLight/Dark，它们只用到 miuix-preference
+        // 与主题，不含任何 AGSL 着色器，在 Robolectric（JVM/layoutlib）下能正常光栅化。
+        //
+        // 玻璃/液态预览（液态底栏、HomePage 的 Card squircle、整棵 App 的真玻璃路径）刻意不扫：
+        // miuix 的 AGSL 着色器用了 `layout(color)` 限定符，而 Robolectric 4.14.1 自带的
+        // ShadowNativeRuntimeShader / 其内嵌 Skia 并不支持该限定符，构造 RuntimeShader 时直接抛
+        // IllegalArgumentException（"error: 'color' is not a valid layout qualifier"），8 条预览里有
+        // 6 条因此必红。这是 Robolectric 的渲染限制，不是 app bug——同一套代码在真机/模拟器上
+        // 由 build-apk.yml 的 emulator 冒烟 job 验证能正常启动与渲染。
+        // 把玻璃预览留在 preview/Previews.kt（包名 preview，不被本扫描命中），作为 emulator 冒烟
+        // 的 golden 参考来源，未来可接成 emulator 上的像素比对。
+        packages = listOf("preview.settings")
         // 刻意不覆盖 robolectricConfig：默认值已是 sdk=["[33]"] + Pixel_4a。
         // miuix-blur 的 AAR 要求 minSdk 33，同时 isRuntimeShaderSupported() 判的也是 >= 33，
         // 把 sdk 改成别的值要么让模糊代码整段不执行，要么直接不满足库要求。

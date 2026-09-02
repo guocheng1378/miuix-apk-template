@@ -13,17 +13,23 @@ import top.yukonga.miuix.kmp.icon.extended.Settings
 import top.yukonga.miuixapptemplate.App
 import top.yukonga.miuixapptemplate.AppPrefs
 import top.yukonga.miuixapptemplate.HomePage
-import top.yukonga.miuixapptemplate.SettingsPage
 import ui.AppTheme
 import ui.keyColorFor
 
 /**
- * 关键可复用 composable 的预览集合，同时充当 roborazzi 截图回归的 golden 来源。
+ * device-only 预览集合（玻璃 / squircle / 整 App 真玻璃路径）。
  *
- * 这里集中放在独立的 `preview` 包（而不是散进各业务文件），是为了让
- * `roborazzi { generateComposePreviewRobolectricTests { packages = listOf("preview") } }`
- * 一条配置就能限定扫描范围：既不会把第三方库（miuix / coil）自带的 @Preview 扫进来
- * 产生无关 golden，也不会因为后续拆分业务文件而漏掉预览。
+ * 这些预览只放在 `preview` 包里，**不属于** JVM 截图回归的扫描范围——扫描只命中
+ * `preview.settings`（见 `shared/build.gradle.kts` 的 `roborazzi { packages }`）。
+ * 原因：miuix 的 AGSL 着色器用了 `layout(color)` 限定符，Robolectric 的
+ * ShadowNativeRuntimeShader 内嵌 Skia 不认它，构造 RuntimeShader 时直接抛
+ * `IllegalArgumentException("error: 'color' is not a valid layout qualifier")`，
+ * 凡经过 squircle（Card）/ blur（液态底栏）/ 真玻璃路径的预览都会必红。
+ *
+ * 这套预览的真正用途是给 **emulator 冒烟 job**（`build-apk.yml`）当可渲染的
+ * golden 参考来源；同一套代码在真机/模拟器上由那个 job 验证能正常启动与渲染。
+ * 不要为了「让截图测试变绿」而在这里删玻璃预览——那是 Robolectric 的能力边界，
+ * 不是 app 的问题。
  *
  * ## 为什么不用 @PreviewLightDark
  * 本项目的明暗不是走系统的 `Configuration.uiMode`，而是由 [AppTheme] 里的
@@ -50,12 +56,11 @@ private class PreviewPrefs(
 // region 液态玻璃底栏
 
 /**
- * 底栏浅色态。
+ * 底栏浅色态（device-only 预览，不被 JVM 截图扫描）。
  *
- * `backdrop = null, isBlurActive = false` 是刻意的：这两个参数同时决定组件走
- * `drawBackdrop`（真采样模糊）还是 `Modifier.background(containerColor, pillShape)`
- * 回退分支。回退分支不依赖 GPU/着色器，在 Robolectric 的 layoutlib 下输出确定，
- * 适合当 golden；真玻璃路径交给下面的 App 级预览去覆盖。
+ * `backdrop = null, isBlurActive = false` 让组件走 `Modifier.background(containerColor, pillShape)`
+ * 回退分支；但 `IosLiquidGlassNavigationBar` 内部仍会无条件构造 `InteractiveHighlight`
+ * 的 AGSL 着色器，Robolectric 下同样构造即抛异常。所以这条预览也只能在 emulator 冒烟里渲染。
  */
 @Preview(name = "LiquidGlassNavigationBarLight", widthDp = 360, heightDp = 120)
 @Composable
@@ -103,57 +108,15 @@ private fun previewNavItems(): List<NavigationItem> = listOf(
 
 // endregion
 
-// region 设置页
-
-/**
- * 设置页浅色态：themeMode=1 让单选框选中「浅色」，keyColorIndex=0 走默认主题色，
- * notifications=true 让开关处于打开态（开关两态的绘制差异是本页最有回归价值的部分）。
- */
-@Preview(name = "SettingsPageLight")
-@Composable
-fun SettingsPageLight() {
-    AppTheme(colorMode = 1) {
-        SettingsPage(
-            themeMode = 1,
-            keyColorIndex = 0,
-            notifications = true,
-            onThemeChange = {},
-            onKeyColorChange = {},
-            onNotificationsChange = {},
-            scrollBehavior = MiuixScrollBehavior(),
-        )
-    }
-}
-
-/** 设置页深色态 + 自定义主题色（keyColorIndex=3 经 [keyColorFor] 映射到具体色值）。 */
-@Preview(name = "SettingsPageDark")
-@Composable
-fun SettingsPageDark() {
-    AppTheme(colorMode = 2, keyColor = keyColorFor(3)) {
-        SettingsPage(
-            themeMode = 2,
-            keyColorIndex = 3,
-            notifications = false,
-            onThemeChange = {},
-            onKeyColorChange = {},
-            onNotificationsChange = {},
-            scrollBehavior = MiuixScrollBehavior(),
-        )
-    }
-}
-
-// endregion
-
 // region 首页
 
 /**
- * 首页浅色态。
+ * 首页浅色态（device-only 预览：见文件头说明，不被 JVM 截图扫描）。
  *
  * HomePage 内部的 `LaunchedEffect(loading)` / `LaunchedEffect(isRefreshing)` 初始值都是
- * false，所以预览期间不会有延时任务在跑，首帧即稳定态。
- * `buttonBackdrop = null` 是刻意的：页面内的 LiquidButton 因此走非玻璃分支，不依赖
- * GPU/着色器，在 Robolectric 的 layoutlib 下输出确定，适合当 golden；
- * 真玻璃路径交给下面的 App 级预览去覆盖。
+ * false，所以预览期间不会有延时任务在跑，首帧即稳定态。注意 `HomePage` 用了 `Card`
+ * （miuix-squircle），其 AGSL 着色器在 Robolectric 下构造即抛异常，所以这条预览只能在
+ * emulator 冒烟 job 里渲染，不能在 JVM 截图回归里跑。
  */
 @Preview(name = "HomePageLight")
 @Composable
@@ -187,13 +150,12 @@ fun HomePageDark() {
 // region 整 App（真玻璃路径）
 
 /**
- * 整棵 App 树浅色态。
+ * 整棵 App 树浅色态（device-only 预览，不被 JVM 截图扫描）。
  *
- * 与上面几组的区别：[App] 内部会自己调 `isRuntimeShaderSupported()`。该判断只看
- * `Build.VERSION.SDK_INT >= 33`，而 roborazzi 生成的测试默认 `@Config(sdk = ["[33]"])`，
- * 所以这里返回 true，会真正走 `rememberLayerBackdrop()` + AGSL 着色器路径。
- * 这一组是整套 golden 里唯一覆盖「真玻璃」的，也是最可能因 layoutlib 对 AGSL 支持
- * 不稳定而漂移的两条；如果它们反复变红，删掉这两个函数即可，其余六条不受影响。
+ * [App] 内部会自己调 `isRuntimeShaderSupported()`。该判断只看
+ * `Build.VERSION.SDK_INT >= 33`，而真机/模拟器上返回 true，会真正走
+ * `rememberLayerBackdrop()` + AGSL 着色器路径——正是 Robolectric 跑不起来的那段，
+ * 所以交给 emulator 冒烟 job 验证。JVM 截图回归只覆盖 `preview.settings`（无 AGSL）。
  *
  * 主题由 [App] 自己从 [AppPrefs] 里读，所以外面不再包 [AppTheme]，只喂不同的 prefs。
  */
