@@ -6,6 +6,11 @@ on:
       - "v*"
   workflow_dispatch:
 
+# 必需：softprops/action-gh-release 要用 GITHUB_TOKEN 创建 Release。
+# 缺省权限只有 read，会返回 403 "Resource not accessible by integration"。
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
