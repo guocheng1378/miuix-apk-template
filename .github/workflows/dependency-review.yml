@@ -1,0 +1,75 @@
+name: Dependency Review
+
+# 两个 job 必须放在同一个 workflow 里，缺一不可：
+#   1) GitHub 的依赖图只会自动解析部分生态的 manifest/lock 文件，Gradle 不在其中，
+#      所以没有下面的 dependency-graph job 提交数据，Dependency Review 就没有任何东西可 diff；
+#   2) dependency-review-action 走的是 dependency-graph/compare REST 端点，
+#      它比较的是 base revision 与 head revision 各自已存储的依赖图 ——
+#      因此 push 到默认分支（刷新 base 侧）和 pull_request（提交 head 侧）都要触发。
+# GitHub 官方文档明确建议把 submission 与 review 放在同一个 workflow 中以控制执行顺序，
+# 避免竞态导致「缺快照、没有数据」。
+on:
+  # 合入默认分支后刷新 base 侧依赖图（本仓库默认分支是 master）
+  push:
+    branches: [master]
+  pull_request:
+
+# 最小权限：只有提交依赖图的 job 需要写 contents
+permissions:
+  contents: read
+
+jobs:
+  # 生成并提交当前 revision 的依赖图。
+  # 这一步只让 Gradle「解析依赖」，不编译代码，比完整构建快很多。
+  # 注意：来自 fork 的 PR 其 GITHUB_TOKEN 被强制降为只读，提交必然 403，
+  # 所以这里只在 push 或同仓库分支的 PR 上跑；fork PR 仍会走下面的 review job。
+  dependency-graph:
+    if: >-
+      github.event_name == 'push' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # 与 build-apk.yml 保持一致的 JDK，避免 AGP 9.x 对 JDK 版本的要求在这里翻车。
+      - name: Set up JDK 21
+        uses: actions/setup-java@v6
+        with:
+          distribution: zulu
+          java-version: "21"
+
+      # 仓库没有提交 gradlew / wrapper jar（只有 gradle-wrapper.properties），
+      # 而本 action 默认优先用 wrapper，找不到就会退回去摸 PATH 上的 gradle。
+      # 显式指定与 distributionUrl 相同的版本（引号防止 YAML 转成数字）。
+      - name: Generate and submit dependency graph
+        uses: gradle/actions/dependency-submission@v6
+        with:
+          gradle-version: '9.7.1'
+          # 默认值 generate-submit-and-upload 会额外把依赖图存成保留 30 天的
+          # workflow artifact，白占存储；这里提交给 GitHub 就够了。
+          dependency-graph: generate-and-submit
+
+  dependency-review:
+    needs: dependency-graph
+    # 上游被跳过（fork PR）时仍要跑：base 侧依赖图还在，至少能报出本 PR 引入的依赖变化。
+    if: >-
+      github.event_name == 'pull_request' &&
+      (needs.dependency-graph.result == 'success' || needs.dependency-graph.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Dependency review
+        uses: actions/dependency-review-action@v5
+        with:
+          # 取 moderate 而不是默认的 low：Gradle 提交的依赖图包含 AGP / Kotlin 插件
+          # 所在 build classpath 的传递依赖，这类 low 级别告警通常既不在我们控制范围内
+          # 也无法自行升级，用默认阈值会把模板的 PR 检查长期染红。
+          fail-on-severity: moderate
+          # 提交依赖图与读取依赖图之间存在可见性延迟，缺快照时重试而不是直接判定通过。
+          retry-on-snapshot-warnings: true
+          retry-on-snapshot-warnings-timeout: 180
