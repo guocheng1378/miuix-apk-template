@@ -9,6 +9,7 @@
   },
   "homepage": "https://github.com/guocheng1378/miuix-apk-template",
   "repository": "https://github.com/guocheng1378/miuix-apk-template",
+  "license": "apache-2.0",
   "keywords": [
     "miuix",
     "android",
