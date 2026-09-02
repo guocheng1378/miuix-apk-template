@@ -1,5 +1,9 @@
 # MIUIX APK 模板（Compose Multiplatform）
 
+![Build + emulator 冒烟](https://github.com/guocheng1378/miuix-apk-template/actions/workflows/build-apk.yml/badge.svg)
+![Screenshot 回归](https://github.com/guocheng1378/miuix-apk-template/actions/workflows/test.yml/badge.svg)
+![Dependency Review](https://github.com/guocheng1378/miuix-apk-template/actions/workflows/dependency-review.yml/badge.svg)
+
 用 **MIUIX 组件库**（`top.yukonga.miuix.kmp:miuix-ui`）搭建原生 Android 界面并产出 Release APK 的通用脚手架：**配好签名 Secrets 才产出已签名 APK**，未配置时产出 `app-release-unsigned.apk`（需自行用 `apksigner` 对齐并签名后才能安装/发布）。
 
 全流程托管在 GitHub：把仓库推上去 → 配置签名 Secrets（不配的话 CI 的签名校验一步会直接判失败，见下文）→ 打 `v*` tag（或手动触发）→ GitHub Actions 自动编译并签名 → 产物为 APK（可下载 / 打 tag 时自动建 Release）。
@@ -182,6 +186,32 @@ apksigner verify --verbose --print-certs app-release.apk
 
 > GitHub 会在每个 Release 资产上直接标 `sha256:<摘要>`，可与上面第一条对照。
 > 换自己的密钥后这两个指纹都会变，别拿本仓库的值去校验 fork 的产物。
+
+## 快速使用
+
+### 直接装 App（不写代码）
+
+去 [v1.0.4 Release](https://github.com/guocheng1378/miuix-apk-template/releases/tag/v1.0.4) 下载 `app-release.apk`，核对 sha256 后安装（Android 需允许「安装未知来源应用」；自签证书会提示不受信任，属预期）：
+
+```bash
+sha256sum app-release.apk
+# 期望：652c1d4a62e224fe0e6ff34d081860e89c6f6cae45aeb3d2f55cd656deef24aa
+```
+
+### fork 后自己改壳发版
+
+1. fork 本仓库 → `Settings → Secrets and variables → Actions` 配齐 4 个 Secrets（`SIGNING_KEY` / `KEYSTORE_PASSWORD` / `KEY_ALIAS` / `KEY_PASSWORD`，生成方式见 [GitHub Actions 自动构建 + 签名](#github-actions-自动构建--签名)）。**不配的话 CI 的签名校验一步会直接判红。**
+2. 改三处即可换皮：`shared/src/commonMain/kotlin/top/yukonga/miuixapptemplate/App.kt` 的页面内容、`app/build.gradle.kts` 的 `applicationId`、`app/src/main/res/values/strings.xml` 的 `app_name`。
+3. 打 tag 触发全自动出包：
+
+```bash
+git tag v1.0.0 && git push origin v1.0.0
+# Actions 自动编译 → 签名 → apksigner verify → 建 Release 附 APK
+```
+
+### 用 skill 生成同类 App
+
+本仓库自带 `skills/generate-miuix-app/`，是一个符合 agentskills 规范的 AI skill：把它放进 agent 的 skills 目录，说一句「生成一个 MIUIX 风格的 APK」即可按模板脚手架产出一个新工程（含液态玻璃底栏、导航、主题、CI 配置），并自动避开 [测试与验证现状](#测试与验证现状) 里记录的那几个运行时坑。约束与接线规则见 `skills/generate-miuix-app/SKILL.md`。
 
 ## 测试与验证现状
 
