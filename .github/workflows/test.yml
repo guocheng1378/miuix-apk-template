@@ -1,0 +1,84 @@
+name: Screenshot Regression
+
+# 截图回归跑在 JVM（Robolectric + layoutlib）上，不需要模拟器，成本远低于
+# build-apk.yml 里那个 emulator 冒烟 job，所以 PR 和 master 推送都跑。
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+# 本 workflow 只读代码、写 artifact（artifact 上传走独立的运行时 token），
+# 不需要 contents: write。显式收窄权限，避免默认权限过宽。
+permissions:
+  contents: read
+
+jobs:
+  screenshots:
+    runs-on: ubuntu-latest
+    # Robolectric 首次运行要下载 android-all jar，加上 8 条预览的冷编译，
+    # 给 30 分钟足够；卡住时也能比默认 360min 早得多的到反馈。
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # 版本与 build-apk.yml 保持一致（zulu / 21），两条 workflow 的 toolchain 不漂移。
+      - name: Set up JDK 21
+        uses: actions/setup-java@v6
+        with:
+          distribution: zulu
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      # 用 gradle 而不是 ./gradlew：本仓库 gradle/wrapper/ 下只有
+      # gradle-wrapper.properties，没有 wrapper jar 也没有 gradlew 脚本，
+      # setup-gradle 已在 PATH 上提供 Gradle 9.x（与 AGP 9.3.2 匹配）。
+      #
+      # 为什么是 :shared:check 而不是 :shared:recordRoborazziAndroidHostTest：
+      # roborazzi 的 record/verify 任务名是 "record" + capitalize(单测变体名) 拼出来的，
+      # 新 KMP 插件下那个变体名（大概率 androidHostTest）我没有实跑确证过，猜错就是
+      # 直接红。而 check 是生命周期任务一定存在，且 AGP 9.3.2 里 check 依赖 host 单测任务
+      # （已从 AGP jar 常量池核实），再配下面的 -Proborazzi.test.record=true 让 roborazzi
+      # 插件把系统属性透传给 Test 任务，效果等价且不用猜任务名。
+      #
+      # 为什么首版只 record 不 verify：roborazzi 的 golden（参考图）默认就落在
+      # build/outputs/roborazzi —— 那是构建目录，不进版本库，所以仓库里现在没有任何基线。
+      # 一上来就 -Proborazzi.test.verify=true 会因为找不到对比图而全红。
+      # 建立基线有两条路，二选一后再把 verify 参数加回来：
+      #   A. 在 shared/build.gradle.kts 的 roborazzi { } 里加
+      #      outputDir.set(file("src/screenshots"))，把 golden 变成可提交的文件；
+      #   B. 照官方 CI 写法，用 dawidd6/action-download-artifact 从 master 分支的
+      #      artifact 拉基线到 build/outputs/roborazzi 再跑 verify。
+      # 在此之前，本 workflow 的价值是「预览能渲染、测试能跑通」这层回归信号。
+      - name: Record screenshots
+        run: gradle :shared:check -Proborazzi.test.record=true --no-daemon --stacktrace
+        # 基线建好后改成：
+        # run: gradle :shared:check -Proborazzi.test.verify=true --no-daemon --stacktrace
+
+      # 防止「假绿」：如果 @Preview 扫描范围配错（比如 packages 写错、CPS 用了 :common
+      # 变体），测试会 0 条通过、构建全绿但一张图都没有。这里显式要求至少产出一张 PNG。
+      - name: Ensure screenshots were produced
+        run: |
+          COUNT=$(find shared/build/outputs/roborazzi -name '*.png' -type f 2>/dev/null | wc -l)
+          echo "生成截图 $COUNT 张"
+          find shared/build/outputs/roborazzi -name '*.png' -type f 2>/dev/null | sort
+          if [ "$COUNT" -lt 1 ]; then
+            echo "!! 没有任何截图产出：预览扫描没命中，或测试被跳过了"
+            exit 1
+          fi
+
+      # 路径写成 **/*.png 而不是固定目录：roborazzi 的 separateOutputDirs 默认 false，
+      # 输出在 shared/build/outputs/roborazzi/；一旦哪天开了该开关会变成按 variant 分子目录，
+      # 通配写法两种布局都能收走。if: always() 保证失败时也上传——失败现场的图正是排查依据。
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: roborazzi-screenshots
+          path: shared/build/outputs/roborazzi/**/*.png
+          if-no-files-found: warn
+          retention-days: 14
