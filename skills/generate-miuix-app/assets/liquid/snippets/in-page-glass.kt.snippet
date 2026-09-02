@@ -1,0 +1,103 @@
+// 节选自本仓库 shared/src/commonMain/kotlin/top/yukonga/miuixapptemplate/App.kt:673-761
+// 出处头沿用上游约定：Adapted from Kyant0/AndroidLiquidGlass —
+// https://github.com/Kyant0/AndroidLiquidGlass (Apache 2.0).
+//
+// 页面内玻璃元素的标准写法：另起一个 LayerBackdrop 实例，注册在纯装饰的**兄弟**层上，
+// 玻璃按钮采样它。这两个 composable 可整份粘贴进目标工程（补 import 即可）。
+//
+// imports（App.kt:13、:32、:56、:60-66）：
+//   import androidx.compose.foundation.shape.CircleShape
+//   import androidx.compose.ui.draw.clip
+//   import top.yukonga.miuix.kmp.blur.{BlendColorEntry, BlurDefaults, LayerBackdrop, layerBackdrop, textureBlur}
+//   import top.yukonga.miuix.kmp.squircle.squircleSurface
+// 另需 Box/Text/MiuixTheme/clickable/Brush/Color/Alignment/Modifier 等常规 import。
+//
+/**
+ * 液态按钮的背景源层：把 [buttonBackdrop] 注册在这层纯装饰的兄弟节点上，
+ * 页面里的 [LiquidButton] 采样它来折射"按钮背后"的颜色。
+ * 这里画的是两团低透明度的主题色渐变（primary / tertiaryContainer），
+ * 只作折射源用，不额外铺满整页底色。
+ */
+@Composable
+private fun LiquidButtonBackdropLayer(buttonBackdrop: LayerBackdrop?, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier.then(buttonBackdrop?.let { Modifier.layerBackdrop(it) } ?: Modifier),
+    ) {
+        Box(
+            Modifier
+                .fillMaxWidth(0.75f)
+                .fillMaxHeight(0.45f)
+                .align(Alignment.TopStart)
+                .padding(32.dp)
+                .background(
+                    Brush.radialGradient(
+                        colors = listOf(
+                            MiuixTheme.colorScheme.primary.copy(alpha = 0.22f),
+                            Color.Transparent,
+                        ),
+                    ),
+                ),
+        )
+        Box(
+            Modifier
+                .fillMaxWidth(0.7f)
+                .fillMaxHeight(0.4f)
+                .align(Alignment.BottomEnd)
+                .padding(24.dp)
+                .background(
+                    Brush.radialGradient(
+                        colors = listOf(
+                            MiuixTheme.colorScheme.tertiaryContainer.copy(alpha = 0.18f),
+                            Color.Transparent,
+                        ),
+                    ),
+                ),
+        )
+    }
+}
+
+/**
+ * 液态玻璃按钮：把 textureBlur 叠在可点击元素上，折射 [backdrop]（页面内按钮专用的
+ * 背景兄弟层，见 [LiquidButtonBackdropLayer]）里的内容。注意这个 backdrop 必须是按钮
+ * 的兄弟而非祖先，否则 RenderNode 成环会 native 崩溃；[backdrop] 为 null
+ * （不支持 RuntimeShader）时退化为普通 squircle 按钮。
+ */
+@Composable
+fun LiquidButton(
+    text: String,
+    onClick: () -> Unit,
+    backdrop: LayerBackdrop?,
+    modifier: Modifier = Modifier,
+) {
+    val corner = 28.dp
+    Box(
+        modifier = modifier
+            // 不支持 RuntimeShader（无液态玻璃）时退化为 squircle 连续圆角，而非纯圆
+            .then(
+                if (backdrop != null) {
+                    Modifier.clip(CircleShape)
+                } else {
+                    Modifier.squircleSurface(MiuixTheme.colorScheme.primary.copy(alpha = 0.12f), corner)
+                },
+            )
+            .clickable(onClick = onClick)
+            .then(
+                backdrop?.let {
+                    Modifier.textureBlur(
+                        backdrop = it,
+                        shape = CircleShape,
+                        blurRadius = 18f,
+                        colors = BlurDefaults.blurColors(
+                            blendColors = listOf(
+                                BlendColorEntry(MiuixTheme.colorScheme.primary.copy(alpha = 0.5f)),
+                            ),
+                        ),
+                    )
+                } ?: Modifier,
+            )
+            .padding(horizontal = 24.dp, vertical = 12.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text, color = MiuixTheme.colorScheme.onPrimary)
+    }
+}

@@ -1,0 +1,76 @@
+// 节选自本仓库 shared/src/commonMain/kotlin/top/yukonga/miuixapptemplate/App.kt
+// （:39、:60-66、:122-128、:201-245、:246-254），出处头沿用上游约定：
+// Adapted from Kyant0/AndroidLiquidGlass — https://github.com/Kyant0/AndroidLiquidGlass (Apache 2.0).
+//
+// 这是**接线片段，不可直接编译**：Route / nav / selectedTab / isTopTab 等由目标工程自己提供。
+// 演示三件事：双实例声明、content 槽注册、bottomBar 槽采样。
+
+// --- imports（App.kt:39、:60-66） ---
+//import component.liquid.IosLiquidGlassNavigationBar
+//import top.yukonga.miuix.kmp.blur.BlendColorEntry
+//import top.yukonga.miuix.kmp.blur.BlurDefaults
+//import top.yukonga.miuix.kmp.blur.isRuntimeShaderSupported
+//import top.yukonga.miuix.kmp.blur.layerBackdrop
+//import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
+//import top.yukonga.miuix.kmp.blur.textureBlur
+
+// --- 1. 两个独立实例（App.kt:122-128） ---
+// backdrop：页面内容层，只在 Scaffold content 槽注册一次，由 bottomBar（兄弟槽）采样。
+val backdrop = if (isRuntimeShaderSupported()) rememberLayerBackdrop() else null
+// buttonBackdrop：页面内液态按钮专用层。必须与 backdrop 是两个独立实例——
+// 同一实例若被祖先节点 layerBackdrop 注册、又被其后代 textureBlur 采样，
+// 会在 Android 上形成 RenderNode 父子环，prepareTree 无限递归直接 native 崩溃。
+val buttonBackdrop = if (isRuntimeShaderSupported()) rememberLayerBackdrop() else null
+val blurActive = backdrop != null
+
+// --- 2. bottomBar 槽：外层 Box 采样 backdrop，再放组件（App.kt:201-245） ---
+//            bottomBar = {
+//                Box(
+//                    Modifier
+//                        .fillMaxWidth()
+//                        .padding(bottom = 16.dp)
+//                        .then(
+//                            backdrop?.let {
+//                                Modifier.textureBlur(
+//                                    backdrop = it,
+//                                    shape = RectangleShape,
+//                                    blurRadius = 25f,
+//                                    colors = BlurDefaults.blurColors(
+//                                        blendColors = listOf(
+//                                            BlendColorEntry(MiuixTheme.colorScheme.surface.copy(alpha = 0.8f)),
+//                                        ),
+//                                    ),
+//                                )
+//                            } ?: Modifier,
+//                        ),
+//                ) {
+//                    IosLiquidGlassNavigationBar(
+//                        items = listOf(
+//                            NavigationItem("首页", MiuixIcons.Home),
+//                            NavigationItem("图片", MiuixIcons.Image),
+//                            NavigationItem("设置", MiuixIcons.Settings),
+//                        ),
+//                        selectedIndex = selectedTab,
+//                        onItemClick = { index -> /* index -> Route，nav.replace(target) */ },
+//                        backdrop = backdrop,
+//                        isBlurActive = blurActive,
+//                    )
+//                }
+//            },
+//
+// 注意 NavigationItem 只有 (label, icon) 两个参数（miuix basic/NavigationBar.kt:541），
+// 没有 badge/selected 参数；徽标走组件自己的 badge 槽位参数。
+
+// --- 3. content 槽：唯一注册点（App.kt:246-254） ---
+//        ) { innerPadding ->
+//            // 页面内容统一在这里注册进 backdrop（只此一处）：bottomBar 位于 Scaffold 的兄弟槽位，
+//            // 采样它不会成环；转场期间两个 entry 同时存活也共用同一个注册节点，避免重复 recordLayer。
+//            Box(
+//                modifier = Modifier
+//                    .fillMaxSize()
+//                    .padding(innerPadding)
+//                    .then(backdrop?.let { Modifier.layerBackdrop(it) } ?: Modifier),
+//            ) {
+//                NavDisplay(navController = nav, modifier = Modifier.fillMaxSize()) { /* entries */ }
+//            }
+//        }
