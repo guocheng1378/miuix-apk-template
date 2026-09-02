@@ -151,14 +151,16 @@ fun SettingsPageDark() {
  *
  * HomePage 内部的 `LaunchedEffect(loading)` / `LaunchedEffect(isRefreshing)` 初始值都是
  * false，所以预览期间不会有延时任务在跑，首帧即稳定态。
- * backdrop 同样传 null 走非玻璃分支。
+ * `buttonBackdrop = null` 是刻意的：页面内的 LiquidButton 因此走非玻璃分支，不依赖
+ * GPU/着色器，在 Robolectric 的 layoutlib 下输出确定，适合当 golden；
+ * 真玻璃路径交给下面的 App 级预览去覆盖。
  */
 @Preview(name = "HomePageLight")
 @Composable
 fun HomePageLight() {
     AppTheme(colorMode = 1) {
         HomePage(
-            backdrop = null,
+            buttonBackdrop = null,
             snackbarHost = SnackbarHostState(),
             onOpenDetail = {},
             scrollBehavior = MiuixScrollBehavior(),
@@ -172,7 +174,7 @@ fun HomePageLight() {
 fun HomePageDark() {
     AppTheme(colorMode = 2) {
         HomePage(
-            backdrop = null,
+            buttonBackdrop = null,
             snackbarHost = SnackbarHostState(),
             onOpenDetail = {},
             scrollBehavior = MiuixScrollBehavior(),

@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -29,6 +30,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.unit.dp
@@ -116,7 +118,12 @@ fun App(prefs: AppPrefs) {
     val setNotifications: (Boolean) -> Unit = { b -> notifications = b; prefs.notificationsEnabled = b }
 
     MiuixTheme(controller = controller) {
+        // backdrop：页面内容层，只在 Scaffold content 槽注册一次，由 bottomBar（兄弟槽）采样。
         val backdrop = if (isRuntimeShaderSupported()) rememberLayerBackdrop() else null
+        // buttonBackdrop：页面内液态按钮专用层。必须与 backdrop 是两个独立实例——
+        // 同一实例若被祖先节点 layerBackdrop 注册、又被其后代 textureBlur 采样，
+        // 会在 Android 上形成 RenderNode 父子环，prepareTree 无限递归直接 native 崩溃。
+        val buttonBackdrop = if (isRuntimeShaderSupported()) rememberLayerBackdrop() else null
         val blurActive = backdrop != null
         val nav = rememberNavController<Route>(Route.Home)
         val snackbarHost = remember { SnackbarHostState() }
@@ -231,34 +238,41 @@ fun App(prefs: AppPrefs) {
                 }
             },
         ) { innerPadding ->
-            NavDisplay(
-                navController = nav,
+            // 页面内容统一在这里注册进 backdrop（只此一处）：bottomBar 位于 Scaffold 的兄弟槽位，
+            // 采样它不会成环；转场期间两个 entry 同时存活也共用同一个注册节点，避免重复 recordLayer。
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(innerPadding),
+                    .padding(innerPadding)
+                    .then(backdrop?.let { Modifier.layerBackdrop(it) } ?: Modifier),
             ) {
-                entry<Route.Home> {
-                    HomePage(
-                        backdrop = backdrop,
-                        snackbarHost = snackbarHost,
-                        onOpenDetail = { nav.push(Route.Detail(it)) },
-                        scrollBehavior = scrollBehavior,
-                    )
-                }
-                entry<Route.Image> { ImagePage(backdrop, onOpenDetail = { nav.push(Route.Detail(it)) }, scrollBehavior = scrollBehavior) }
-                entry<Route.Settings> {
-                    SettingsPage(
-                        themeMode = themeMode,
-                        keyColorIndex = keyColorIndex,
-                        notifications = notifications,
-                        onThemeChange = setThemeMode,
-                        onKeyColorChange = setKeyColorIndex,
-                        onNotificationsChange = setNotifications,
-                        scrollBehavior = scrollBehavior,
-                    )
-                }
-                entry<Route.Detail> {
-                    DetailPage(id = it.id, onBack = { nav.pop() }, backdrop = backdrop, scrollBehavior = scrollBehavior)
+                NavDisplay(
+                    navController = nav,
+                    modifier = Modifier.fillMaxSize(),
+                ) {
+                    entry<Route.Home> {
+                        HomePage(
+                            buttonBackdrop = buttonBackdrop,
+                            snackbarHost = snackbarHost,
+                            onOpenDetail = { nav.push(Route.Detail(it)) },
+                            scrollBehavior = scrollBehavior,
+                        )
+                    }
+                    entry<Route.Image> { ImagePage(onOpenDetail = { nav.push(Route.Detail(it)) }, scrollBehavior = scrollBehavior) }
+                    entry<Route.Settings> {
+                        SettingsPage(
+                            themeMode = themeMode,
+                            keyColorIndex = keyColorIndex,
+                            notifications = notifications,
+                            onThemeChange = setThemeMode,
+                            onKeyColorChange = setKeyColorIndex,
+                            onNotificationsChange = setNotifications,
+                            scrollBehavior = scrollBehavior,
+                        )
+                    }
+                    entry<Route.Detail> {
+                        DetailPage(id = it.id, onBack = { nav.pop() }, buttonBackdrop = buttonBackdrop, scrollBehavior = scrollBehavior)
+                    }
                 }
             }
         }
@@ -268,7 +282,7 @@ fun App(prefs: AppPrefs) {
 /** 首页：说明卡 + 通用控件 + 状态演示 + 可点击/可左滑删除列表（push 到详情页） */
 @Composable
 fun HomePage(
-    backdrop: LayerBackdrop?,
+    buttonBackdrop: LayerBackdrop?,
     snackbarHost: SnackbarHostState,
     onOpenDetail: (Int) -> Unit,
     scrollBehavior: ScrollBehavior,
@@ -304,97 +318,101 @@ fun HomePage(
         }
     }
 
-    PullToRefresh(
-        isRefreshing = isRefreshing,
-        onRefresh = { isRefreshing = true },
-        pullToRefreshState = ptrState,
-        topAppBarScrollBehavior = scrollBehavior,
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                
-                .verticalScroll(rememberScrollState())
-                .overScrollVertical()
-                .then(backdrop?.let { Modifier.layerBackdrop(it) } ?: Modifier)
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+    Box(Modifier.fillMaxSize()) {
+        // 背景兄弟层：注册 buttonBackdrop，供本页内的液态按钮折射采样。
+        // 它必须是纯装饰叶子层——子树里不能出现任何 backdrop 消费者，否则又成环。
+        LiquidButtonBackdropLayer(buttonBackdrop, Modifier.matchParentSize())
+
+        PullToRefresh(
+            isRefreshing = isRefreshing,
+            onRefresh = { isRefreshing = true },
+            pullToRefreshState = ptrState,
+            topAppBarScrollBehavior = scrollBehavior,
         ) {
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp)) {
-                    Text("MIUIX 液态玻璃套壳")
-                    Text("miuix-nav 页面栈 + TopAppBar 大标题折叠 + 下拉刷新 + 底部弹层 + 左滑删除。")
-                }
-            }
-
-            SmallTitle(text = "通用")
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    val on = remember { mutableStateOf(true) }
-                    Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
-                        Text("深色模式")
-                        Switch(checked = on.value, onCheckedChange = { on.value = it })
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .overScrollVertical()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text("MIUIX 液态玻璃套壳")
+                        Text("miuix-nav 页面栈 + TopAppBar 大标题折叠 + 下拉刷新 + 底部弹层 + 左滑删除。")
                     }
-                    val progress = remember { mutableStateOf(0.5f) }
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("进度：${"%.0f".format(progress.value * 100)}%")
-                        Slider(value = progress.value, onValueChange = { progress.value = it })
-                    }
-                    LiquidButton("液态按钮", onClick = {}, backdrop = backdrop, modifier = Modifier.fillMaxWidth())
                 }
-            }
 
-            SmallTitle(text = "状态演示")
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
-                        Text("列表是否为空")
-                        Switch(checked = empty, onCheckedChange = { empty = it })
+                SmallTitle(text = "通用")
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        val on = remember { mutableStateOf(true) }
+                        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                            Text("深色模式")
+                            Switch(checked = on.value, onCheckedChange = { on.value = it })
+                        }
+                        val progress = remember { mutableStateOf(0.5f) }
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("进度：${"%.0f".format(progress.value * 100)}%")
+                            Slider(value = progress.value, onValueChange = { progress.value = it })
+                        }
+                        LiquidButton("液态按钮", onClick = {}, backdrop = buttonBackdrop, modifier = Modifier.fillMaxWidth())
                     }
-                    LiquidButton(
-                        text = if (loading) "加载中…" else "模拟加载",
-                        onClick = { loading = true },
-                        backdrop = backdrop,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    LiquidButton(
-                        text = "打开底部弹层",
-                        onClick = { showSheet = true },
-                        backdrop = backdrop,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Text(
-                        when {
-                            loading -> "状态：加载中"
-                            empty -> "状态：暂无数据"
-                            else -> "状态：内容正常"
-                        },
-                    )
                 }
-            }
 
-            if (!empty) {
-                SmallTitle(text = "列表（左滑删除，点击进入详情）")
-                items.forEach { i ->
-                    key(i) {
-                        SwipeToDeleteItem(onDelete = { deleteItem(i) }) {
-                            BasicComponent(
-                                title = "列表项 #$i",
-                                summary = "点击进入详情页 #$i",
-                                modifier = Modifier.fillMaxWidth().clickable { onOpenDetail(i) },
-                                startAction = {
-                                    Box(
-                                        Modifier
-                                            .size(36.dp)
-                                            .clip(CircleShape)
-                                            .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.2f)),
-                                        contentAlignment = Alignment.Center,
-                                    ) { Text("#$i") }
-                                },
-                                endActions = {
-                                    Text("›", fontSize = 20.sp, color = MiuixTheme.colorScheme.onSurface.copy(alpha = 0.4f))
-                                },
-                            )
+                SmallTitle(text = "状态演示")
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                            Text("列表是否为空")
+                            Switch(checked = empty, onCheckedChange = { empty = it })
+                        }
+                        LiquidButton(
+                            text = if (loading) "加载中…" else "模拟加载",
+                            onClick = { loading = true },
+                            backdrop = buttonBackdrop,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        LiquidButton(
+                            text = "打开底部弹层",
+                            onClick = { showSheet = true },
+                            backdrop = buttonBackdrop,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Text(
+                            when {
+                                loading -> "状态：加载中"
+                                empty -> "状态：暂无数据"
+                                else -> "状态：内容正常"
+                            },
+                        )
+                    }
+                }
+
+                if (!empty) {
+                    SmallTitle(text = "列表（左滑删除，点击进入详情）")
+                    items.forEach { i ->
+                        key(i) {
+                            SwipeToDeleteItem(onDelete = { deleteItem(i) }) {
+                                BasicComponent(
+                                    title = "列表项 #$i",
+                                    summary = "点击进入详情页 #$i",
+                                    modifier = Modifier.fillMaxWidth().clickable { onOpenDetail(i) },
+                                    startAction = {
+                                        Box(
+                                            Modifier
+                                                .size(36.dp)
+                                                .clip(CircleShape)
+                                                .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.2f)),
+                                            contentAlignment = Alignment.Center,
+                                        ) { Text("#$i") }
+                                    },
+                                    endActions = {
+                                        Text("›", fontSize = 20.sp, color = MiuixTheme.colorScheme.onSurface.copy(alpha = 0.4f))
+                                    },
+                                )
+                            }
                         }
                     }
                 }
@@ -450,7 +468,7 @@ fun SwipeToDeleteItem(onDelete: () -> Unit, content: @Composable () -> Unit) {
 
 /** 图片页：图集网格（2 列），Coil 加载真图（带加载/失败占位），点击进入 miuix-nav 详情页 */
 @Composable
-fun ImagePage(backdrop: LayerBackdrop?, onOpenDetail: (Int) -> Unit, scrollBehavior: ScrollBehavior) {
+fun ImagePage(onOpenDetail: (Int) -> Unit, scrollBehavior: ScrollBehavior) {
     var isRefreshing by remember { mutableStateOf(false) }
     val ptrState = rememberPullToRefreshState()
     LaunchedEffect(isRefreshing) {
@@ -468,7 +486,6 @@ fun ImagePage(backdrop: LayerBackdrop?, onOpenDetail: (Int) -> Unit, scrollBehav
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .then(backdrop?.let { Modifier.layerBackdrop(it) } ?: Modifier)
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
@@ -594,43 +611,92 @@ fun SettingsPage(
  * NavDisplay 自带边缘/系统返回手势。
  */
 @Composable
-fun DetailPage(id: Int, onBack: () -> Unit, backdrop: LayerBackdrop?, scrollBehavior: ScrollBehavior) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            
-            .verticalScroll(rememberScrollState())
-            .then(backdrop?.let { Modifier.layerBackdrop(it) } ?: Modifier)
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        // 回显图片页点进来的那一张（与图片页共用 seed，无需改 Route）
-        Card(Modifier.fillMaxWidth()) {
-            SubcomposeAsyncImage(
-                model = "https://picsum.photos/seed/$id/600/300",
-                contentDescription = "详情图 #$id",
-                modifier = Modifier.fillMaxWidth().height(160.dp),
-                contentScale = ContentScale.Crop,
+fun DetailPage(id: Int, onBack: () -> Unit, buttonBackdrop: LayerBackdrop?, scrollBehavior: ScrollBehavior) {
+    Box(Modifier.fillMaxSize()) {
+        // 背景兄弟层：与首页同理，按钮只采样自己这层，绝不采样祖先注册的 backdrop
+        LiquidButtonBackdropLayer(buttonBackdrop, Modifier.matchParentSize())
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            // 回显图片页点进来的那一张（与图片页共用 seed，无需改 Route）
+            Card(Modifier.fillMaxWidth()) {
+                SubcomposeAsyncImage(
+                    model = "https://picsum.photos/seed/$id/600/300",
+                    contentDescription = "详情图 #$id",
+                    modifier = Modifier.fillMaxWidth().height(160.dp),
+                    contentScale = ContentScale.Crop,
+                )
+            }
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("详情 #$id")
+                    Text("这是 miuix-nav push 进来的页面：自带返回转场、边缘/系统返回手势，返回后列表状态保留。")
+                }
+            }
+            LiquidButton(
+                text = "返回",
+                onClick = onBack,
+                backdrop = buttonBackdrop,
+                modifier = Modifier.fillMaxWidth(),
             )
         }
-        Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp)) {
-                Text("详情 #$id")
-                Text("这是 miuix-nav push 进来的页面：自带返回转场、边缘/系统返回手势，返回后列表状态保留。")
-            }
-        }
-        LiquidButton(
-            text = "返回",
-            onClick = onBack,
-            backdrop = backdrop,
-            modifier = Modifier.fillMaxWidth(),
+    }
+}
+
+/**
+ * 液态按钮的背景源层：把 [buttonBackdrop] 注册在这层纯装饰的兄弟节点上，
+ * 页面里的 [LiquidButton] 采样它来折射"按钮背后"的颜色。
+ * 这里画的是两团低透明度的主题色渐变（primary / tertiaryContainer），
+ * 只作折射源用，不额外铺满整页底色。
+ */
+@Composable
+private fun LiquidButtonBackdropLayer(buttonBackdrop: LayerBackdrop?, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier.then(buttonBackdrop?.let { Modifier.layerBackdrop(it) } ?: Modifier),
+    ) {
+        Box(
+            Modifier
+                .fillMaxWidth(0.75f)
+                .fillMaxHeight(0.45f)
+                .align(Alignment.TopStart)
+                .padding(32.dp)
+                .background(
+                    Brush.radialGradient(
+                        colors = listOf(
+                            MiuixTheme.colorScheme.primary.copy(alpha = 0.22f),
+                            Color.Transparent,
+                        ),
+                    ),
+                ),
+        )
+        Box(
+            Modifier
+                .fillMaxWidth(0.7f)
+                .fillMaxHeight(0.4f)
+                .align(Alignment.BottomEnd)
+                .padding(24.dp)
+                .background(
+                    Brush.radialGradient(
+                        colors = listOf(
+                            MiuixTheme.colorScheme.tertiaryContainer.copy(alpha = 0.18f),
+                            Color.Transparent,
+                        ),
+                    ),
+                ),
         )
     }
 }
 
 /**
- * 液态玻璃按钮：复用与底栏相同的 backdrop，把 textureBlur 叠在可点击元素上，
- * 从而折射按钮"背后"的内容。backdrop 为 null（不支持 RuntimeShader）时退化为普通按钮。
+ * 液态玻璃按钮：把 textureBlur 叠在可点击元素上，折射 [backdrop]（页面内按钮专用的
+ * 背景兄弟层，见 [LiquidButtonBackdropLayer]）里的内容。注意这个 backdrop 必须是按钮
+ * 的兄弟而非祖先，否则 RenderNode 成环会 native 崩溃；[backdrop] 为 null
+ * （不支持 RuntimeShader）时退化为普通 squircle 按钮。
  */
 @Composable
 fun LiquidButton(
