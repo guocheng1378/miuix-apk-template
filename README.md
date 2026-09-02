@@ -10,8 +10,8 @@
 
 > 本机**无需**安装 JDK / Android SDK；构建与签名全部在 GitHub Actions（自带 JDK 21 + Android SDK，并由 `setup-gradle` 提供 Gradle）完成。
 
-**当前状态**：签名发布链路**已跑通**——本仓库已配置正式签名 Secrets，最新已签名 Release 为 `v1.0.4`（APK Signature Scheme v2，可直接下载安装），见[已发布版本与产物校验](#已发布版本与产物校验)。
-测试体系**已就位三套**且目前**全绿**：① emulator 冒烟（CI 模拟器安装启动 App，抓原生崩溃）；② JVM 截图回归（Robolectric 渲染预览，只扫不含 AGSL 的 `preview.settings` 包）；③ 依赖审查。详见[测试与验证现状](#测试与验证现状)。
+**当前状态**：签名发布链路**已跑通**——本仓库已配置正式签名 Secrets，最新已签名 Release 为 `v1.0.5`（APK Signature Scheme v2，可直接下载安装），见[已发布版本与产物校验](#已发布版本与产物校验)。
+测试体系**已就位三套**，最近一轮（commit `40835bd`，run#15）**三套全绿**：① emulator 冒烟（CI 模拟器安装启动 App，抓原生崩溃）；② JVM 截图回归（Robolectric 渲染预览，只扫不含 AGSL 的 `preview.settings` 包）；③ 依赖审查。详见[测试与验证现状](#测试与验证现状)。
 
 ## 能力清单（代码里实际有的）
 
@@ -159,18 +159,21 @@ base64 -w0 release.keystore
 
 | tag | versionName / versionCode | Release 资产 | 状态 |
 |---|---|---|---|
-| [`v1.0.4`](https://github.com/guocheng1378/miuix-apk-template/releases/tag/v1.0.4) | `1.0.4`（versionCode 由 CI 运行号自增） | `app-release.apk`（9322638 字节 ≈ 8.89 MB） | **已签名，首帧崩溃已修（见[测试与验证现状](#测试与验证现状)），可直接下载安装** |
-| [`v1.0.3`](https://github.com/guocheng1378/miuix-apk-template/releases/tag/v1.0.3) | `1.0.3` / `3` | `app-release.apk` | ⚠️ **已被取代**：APK 在模拟器上首帧 SIGSEGV 崩溃（RenderNode 环，见[测试与验证现状](#测试与验证现状)）。请勿安装，直接用 `v1.0.4` |
+| [`v1.0.5`](https://github.com/guocheng1378/miuix-apk-template/releases/tag/v1.0.5) | `1.0.5` / `14` | `app-release.apk`（9322638 字节 ≈ 8.89 MB） | **已签名，当前推荐版本**：设置页 / 详情页补上大标题折叠接线（见[滚动接线](#滚动接线大标题折叠)），冒烟与签名校验均通过 |
+| [`v1.0.4`](https://github.com/guocheng1378/miuix-apk-template/releases/tag/v1.0.4) | `1.0.4` / `12` | `app-release.apk`（9322638 字节 ≈ 8.89 MB） | **已签名，首帧崩溃已修（见[测试与验证现状](#测试与验证现状)），可直接下载安装** |
+| [`v1.0.3`](https://github.com/guocheng1378/miuix-apk-template/releases/tag/v1.0.3) | `1.0.3` / `3` | `app-release.apk` | ⚠️ **已被取代**：APK 在模拟器上首帧 SIGSEGV 崩溃（RenderNode 环，见[测试与验证现状](#测试与验证现状)）。请勿安装，直接用 `v1.0.5` |
 | [`v1.0.2`](https://github.com/guocheng1378/miuix-apk-template/releases/tag/v1.0.2) | `1.0.2` / `2` | `app-release.apk`（9306061 字节 ≈ 8.87 MB） | **已签名，可直接下载安装** |
 | `v1.0.1` | — | 无 APK 资产（只有 source zip/tar.gz） | 签名链路启用前的构建 |
 
-下载：`https://github.com/guocheng1378/miuix-apk-template/releases/download/v1.0.4/app-release.apk`
+下载：`https://github.com/guocheng1378/miuix-apk-template/releases/download/v1.0.5/app-release.apk`
 
-`v1.0.4` 的完整性（CI 构建产物，签名走与 `v1.0.2` 相同的 keystore，故证书指纹一致）：
+`v1.0.5` 的完整性（CI 构建产物，签名走与 `v1.0.2` / `v1.0.4` 相同的 keystore，故证书指纹一致）：
 
 - 签名方案：**APK Signature Scheme v2**，RSA 2048，单签名者（自签证书）
-- **APK SHA-256**：`652c1d4a62e224fe0e6ff34d081860e89c6f6cae45aeb3d2f55cd656deef24aa`
-- **证书 SHA-256**：`445a46ddcad6465947735503f6d80f2b556337ff5bd6a67470f378e1092195c7`（与 v1.0.2 相同，未换密钥）
+- **APK SHA-256**：`3c513253a680da9cc4c85bc09b2fef1fa4f727cafe7e594b3c2ba4b8c6c1574e`
+- **证书 SHA-256**：`445a46ddcad6465947735503f6d80f2b556337ff5bd6a67470f378e1092195c7`（与 v1.0.2 / v1.0.4 相同，未换密钥）
+
+> `v1.0.5` 与 `v1.0.4` 的 APK 字节数相同（9322638）纯属 zip 对齐巧合，两者 SHA-256 不同（`v1.0.4` 为 `652c1d4a62e224fe0e6ff34d081860e89c6f6cae45aeb3d2f55cd656deef24aa`），确认是两次独立构建。
 
 > 换自己的密钥后这两个指纹都会变，别拿本仓库的值去校验 fork 的产物。
 
@@ -192,11 +195,11 @@ apksigner verify --verbose --print-certs app-release.apk
 
 ### 直接装 App（不写代码）
 
-去 [v1.0.4 Release](https://github.com/guocheng1378/miuix-apk-template/releases/tag/v1.0.4) 下载 `app-release.apk`，核对 sha256 后安装（Android 需允许「安装未知来源应用」；自签证书会提示不受信任，属预期）：
+去 [v1.0.5 Release](https://github.com/guocheng1378/miuix-apk-template/releases/tag/v1.0.5) 下载 `app-release.apk`，核对 sha256 后安装（Android 需允许「安装未知来源应用」；自签证书会提示不受信任，属预期）：
 
 ```bash
 sha256sum app-release.apk
-# 期望：652c1d4a62e224fe0e6ff34d081860e89c6f6cae45aeb3d2f55cd656deef24aa
+# 期望：3c513253a680da9cc4c85bc09b2fef1fa4f727cafe7e594b3c2ba4b8c6c1574e
 ```
 
 ### fork 后自己改壳发版
@@ -219,6 +222,8 @@ git tag v1.0.0 && git push origin v1.0.0
 CI 目前跑**三套**工作流，结论均基于 GitHub Actions 真实产物（非静态推断）：
 
 1. **构建 + emulator 冒烟**（`build-apk.yml`，`push: tags: v*` / `workflow_dispatch`）：`gradle :app:assembleRelease` 编译通过后，在 CI 模拟器里 `adb install` 并启动 `MainActivity`，截一张图、抓 logcat，确认**不崩溃、进程还在**。`v1.0.4` 这轮冒烟**首次真实抓到并修复了一个首帧 native 崩溃**（见下）。
+   - **`v1.0.5` 那轮（run#14）冒烟是红的，但属误报**：app 安装成功、冷启 3.6s、进程存活、activity 是 topResumed，判红的是 `com.google.android.apps.nexuslauncher` 的一条 ANR（时间戳还早于本次启动）；同一 commit 手动重跑的 run#13 是绿的。根因是崩溃断言对整份 logcat 通配，把整机其它进程的事故算到了本包头上。现已改为按归属过滤（本行包名 / 下一行 `Process: <pkg>` / tag 括号里的 pid 属于 `pidof` 结果），并用 run#14 那份真实致红的 logcat 回放验证：旧断言命中 1 条、新断言命中 0 条；另用构造样本确认本 app 的 `FATAL EXCEPTION` 与 `ANR in <本包>` 仍全部命中。修复见 `40835bd`，run#15 三套工作流全绿。
+   - **残留盲区**：native crash 的 `Fatal signal` 行既不带包名、pid 也随进程消失，按归属过滤会漏判；但那种情况 `pidof` 必然为空，上面的「进程存活」检查已经会 FAIL，不会因此放走真闪退。
 2. **JVM 截图回归**（`test.yml`，`push` / `pull_request`）：Robolectric + layoutlib 渲染预览、落 PNG。只扫 `preview.settings` 包（见下「AGSL 限制」），目前产出 `SettingsPageLight` / `SettingsPageDark` 两张图，全绿。
 3. **依赖审查**（`dependency-review.yml`，PR / master）：GitHub Dependency Review Action 逐依赖比对，全绿。
 
@@ -234,6 +239,8 @@ miuix 的 `miuix-squircle`（`Card` / `squircleSurface`）与 `miuix-blur`（液
 
 - **真机逐页手感**：手势返回、下拉刷新手感、左滑删除阈值、液态玻璃在真机的实际观感，仍没有人工/自动化记录（开发环境只有 CI 模拟器，没有真机）。
 - **大标题折叠「到底折不折」仍未验**：`App.kt` 给设置页/详情页补的 `.nestedScroll(scrollBehavior.nestedScrollConnection)` **已过 CI 编译验证**（`3ab3b30` 那轮 `:shared:compileAndroidMain` 非缓存执行、`BUILD SUCCESSFUL`），设置页也被 `preview.settings` 的两张截图真实渲染过。但那两张预览传的是一个**临时的** `MiuixScrollBehavior()`、没有配对的 `TopAppBar`，所以只证明「修饰符链不炸」，**不证明滚动时大标题真的折叠**；详情页没有任何预览覆盖（`Card` 走 AGSL，进不了 JVM 扫描）。折叠手感仍要靠真机/模拟器手动确认。
+  - 已确认「代码进了包」：`v1.0.5` 的 APK 解包后 dex 里能查到这两处新增的用户可见文案（「大标题折叠怎么接上的」「已经包在 PullToRefresh 里的页面」），说明改动确实随 Release 发出去了。
+  - **仍未覆盖的部分**：冒烟只 `am start` 首页 `MainActivity`，从不点进设置页/详情页，所以新接线在真机/模拟器上的**渲染路径至今没有任何自动化覆盖**——它只要会在滚动时炸，当前 CI 也发现不了。这是本次发版后最明确的遗留风险。
 - **GitHub 报的 47 个依赖漏洞**：全部是 Gradle 插件 / Robolectric 等**构建与测试期**传递依赖（netty、bouncycastle、jose4j 等），**不进 Release APK**（已解包核对：APK 只含 okhttp / coil / miuix / compose 等运行时依赖）。升级需动 Gradle / Kotlin / AGP 版本，会冲掉整套已验证版本矩阵，暂不动。
 
 ## 限制与未验证项
