@@ -160,7 +160,7 @@ android.nonTransitiveRClass=true
 ## CI（GitHub Actions，.github/workflows/build-apk.yml）
 
 - 触发：`on.push.tags: ["v*"]` + `workflow_dispatch`
-- 步骤：checkout → setup-java Zulu 21 → `gradle/actions/setup-gradle@v6` → decode signing key（Secrets）→ `gradle :app:assembleRelease --no-daemon` → upload-artifact → tag 时 `softprops/action-gh-release`
+- 步骤：checkout → setup-java Zulu 21 → `gradle/actions/setup-gradle@v6` → decode signing key（Secrets）→ `gradle :app:assembleRelease --no-daemon` → **verify APK signature** → upload-artifact → tag 时 `softprops/action-gh-release`
 - **构建命令是 `gradle`，不是 `./gradlew`**：仓库未提交 wrapper jar，由 setup-gradle 提供与 AGP 9.x 匹配的 Gradle 9.x 并在 PATH 上。**不要**在 workflow 里现场 `gradle wrapper --gradle-version 8.13`——那会造成版本错配
 - Secrets：`SIGNING_KEY`（base64 keystore）、`KEYSTORE_PASSWORD`、`KEY_ALIAS`、`KEY_PASSWORD`
 - 判断写在 shell step 内部 `if [ -n "$SIGNING_KEY" ]`：GitHub 的 `secrets.*` 不能出现在 step 级 `if:` 里，否则整个 workflow 会被解析成 0 个 job
@@ -168,6 +168,26 @@ android.nonTransitiveRClass=true
 - 打 `v*` tag 时 workflow 会额外创建 GitHub Release 并附上 APK
 - **Action 版本必须真实存在**：用 `curl https://api.github.com/repos/<owner>/<action>/releases/latest` 核实（到 2026 年 checkout/setup-java/setup-gradle/upload-artifact 已是 v6/v7，不要臆测）
 - 本地构建需自备 Gradle 9.x + Android SDK（或补交 `gradlew` 与 `gradle/wrapper/gradle-wrapper.jar`）
+
+### 无 JDK 环境下补齐签名（实测可行，全流程无需 Android SDK）
+
+本机常常没有 `java` / `keytool` / `apksigner`。签名材料照样能产出并自动化：
+
+1. **用 openssl 产 PKCS12**（替代 keytool）：
+
+   ```bash
+   openssl req -x509 -newkey rsa:2048 -sha256 -days 10950 -nodes \
+     -keyout key.pem -out cert.pem -subj "/C=CN/O=myorg/CN=my-release"
+   openssl pkcs12 -export -inkey key.pem -in cert.pem -out release.p12 \
+     -name mykey -passout pass:'<口令>'
+   base64 -w0 release.p12          # → SIGNING_KEY 的值
+   ```
+
+   走 PKCS12 时 `app/build.gradle.kts` 的 signingConfig **必须**显式 `storeType = "PKCS12"`，否则 AGP 按默认 JKS 读取会失败。
+2. **用 API 写 Secrets**（替代网页手点，可全自动）：`GET /repos/{o}/{r}/actions/secrets/public-key` 取 `key_id` 与 base64 公钥 → 用 NaCl **sealed box**（PyNaCl `public.SealedBox`，注意不是 `Box`）加密明文 → `PUT /repos/{o}/{r}/actions/secrets/{NAME}`，body `{"key_id":…, "encrypted_value":…}`；201/204 即成功。依赖 `pip install pynacl`（装在 venv 里）。classic PAT 需 `repo`/`admin` 级权限。
+3. **CI 里加签名校验兜底**：产物文件名含 `unsigned` 就 `exit 1`；再用 runner 自带的 `$ANDROID_HOME/build-tools/*/apksigner verify --verbose --print-certs` 打印证书指纹。这样"签名没生效"当场失败，而不是把装不上的包挂到 Release 页上。
+4. **仓库是 public 时，绝不要把 keystore 当 workflow artifact 上传**——artifact 可被任何持 token 者下载，等于泄露私钥。只走 Secrets。
+5. keystore 与口令要**异地备份**：丢了它，同一 `applicationId` 再也无法覆盖升级到已装用户机上。`.gitignore` 需含 `*.jks` / `*.p12` / `*.keystore`。
 
 ## 标准检测流程（交付前必做）
 

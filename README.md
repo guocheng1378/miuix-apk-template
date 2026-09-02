@@ -67,15 +67,34 @@ gradle :app:assembleRelease
 
 ### 1. 生成签名密钥（只需一次）
 
+**推荐：openssl 直接生成 PKCS12，不需要装 JDK**（本仓库 release 密钥就是这么产出来的）：
+
+```bash
+openssl req -x509 -newkey rsa:2048 -sha256 -days 10950 -nodes \
+  -keyout key.pem -out cert.pem \
+  -subj "/C=CN/O=myorg/CN=my-release"
+
+openssl pkcs12 -export -inkey key.pem -in cert.pem -out release.p12 \
+  -name mykey -passout pass:'<你的口令>'
+
+# 转成单行 base64，作为 SIGNING_KEY 的值
+base64 -w0 release.p12
+```
+
+用 PKCS12 时 `app/build.gradle.kts` 必须显式声明 `storeType = "PKCS12"`，
+否则 AGP 按默认 JKS 读取会失败（模板已设好）。
+
+**备选：本机有 JDK 时用 keytool**（产出 JKS，此时把 `storeType` 去掉或改成 `"JKS"`）：
+
 ```bash
 keytool -genkeypair -v \
   -keystore release.keystore -keyalg RSA -keysize 2048 -validity 10000 \
   -alias mykey
-
-# 转成单行 base64，后面要填进 Secret
-base64 -w0 release.keystore > keystore.b64
-cat keystore.b64
+base64 -w0 release.keystore
 ```
+
+> ⚠️ keystore 与口令**必须自行异地备份**，且绝不能提交进仓库（`.gitignore` 已忽略 `*.jks` / `*.p12` / `*.keystore`）。
+> 丢了它，这个 `applicationId` 就再也无法以覆盖升级的方式装到已装用户机上。
 
 ### 2. 在仓库配置 Secrets
 
@@ -95,6 +114,8 @@ cat keystore.b64
 - CI 用 `gradle/actions/setup-gradle@v6` 提供与 AGP 9.x 匹配的 Gradle 9.x（已在 PATH 上），构建命令是 `gradle :app:assembleRelease --no-daemon`，**不是** `./gradlew ...`（仓库未提交 wrapper）。
 - 不要在 workflow 里现场 `gradle wrapper --gradle-version 8.13` 之类的生成命令——那会造成 AGP 9.x 配 Gradle 8.x 的版本错配。
 - 「密钥有没有」的判断放在 shell step 内部：`if [ -n "$SIGNING_KEY" ]`。GitHub 的 `secrets.*` 不能出现在 step 级 `if:` 表达式里，否则整个 workflow 会被解析成 0 个 job。
+- 构建后有一步 **Verify APK signature**：产物文件名含 `unsigned` 就直接让 CI 失败，并用 runner 自带的 `apksigner verify --print-certs` 打印签名证书指纹——避免把装不上的包挂到 Release 页上。
+- Secrets 也可以不走网页、直接用 API 批量写入（自动化场景）：先 `GET /repos/{owner}/{repo}/actions/secrets/public-key` 拿 `key_id` 与公钥，用 NaCl sealed box（PyNaCl `public.SealedBox`）加密，再 `PUT /repos/{owner}/{repo}/actions/secrets/{NAME}`。
 
 ### 4. 触发构建
 
