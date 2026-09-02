@@ -4,7 +4,25 @@
 以下描述本仓库**当前那份** workflow 的真实形态（2026-09-02 读取）。
 仓库里那份是权威，模板只是起点——两者冲突时以 `.github/workflows/build-apk.yml` 为准。
 
-## 结构：两个 job
+## 仓库里其实有三套 workflow
+
+`assets/` 只镜像了 `build-apk.yml` 一份，另两份没有模板，照抄时直接读仓库文件：
+
+| 文件 | 触发 | 干什么 |
+|---|---|---|
+| `build-apk.yml` | `push.tags: ["v*"]` + `workflow_dispatch` | 构建 + 签名 + 模拟器冒烟 + 发 Release |
+| `test.yml` | `pull_request` + `push: master` | JVM 截图回归（Robolectric + Roborazzi），`timeout-minutes: 30` |
+| `dependency-review.yml` | `pull_request` + `push: master` | Gradle 依赖图提交 + Dependency Review，`fail-on-severity: moderate` |
+
+`test.yml` 用 `gradle :shared:check -Proborazzi.test.record=true`（而不是猜 roborazzi 的
+record 任务名），并带一步 `Ensure screenshots were produced`——找不到任何 PNG 就 `exit 1`，
+防「预览扫描没命中却全绿」。派生新 app 时若沿用截图回归，这两点都要复刻。
+
+2026-09-02 实测：`assets/workflow-build-apk.yml` 与 `.github/workflows/build-apk.yml`
+剥掉注释和空行后 `diff` 为空，即模板与仓库当前同步。改仓库那份时记得同步镜像，否则
+生成新工程会拿到旧版。
+
+## `build-apk.yml` 结构：两个 job
 
 ```
 build  ──►  smoke（needs: build）
@@ -46,8 +64,16 @@ build  ──►  smoke（needs: build）
 - 冒烟逻辑写成 `$RUNNER_TEMP/smoke.sh` 文件，`script:` 里只放一行调用。
   原因：`android-emulator-runner` 的 script parser 会把 `script` **按行拆成数组、
   每行单独 `sh -c`**，跨行的 `if/fi`、`case`、变量全部失效。
-- 冒烟判定四项：安装返回 `Success`、`am start -W` 返回 `Status: ok`、
-  `pidof` 非空（没闪退）、logcat 无 `FATAL EXCEPTION|Fatal signal|ANR in|E/AndroidRuntime`。
+- 冒烟判定**五项**（逐项 `FAIL=1`，最后统一判定，中途失败也先把证据收全）：
+  1. `adb install -r -g` 退出码为 0 **且** 输出含 `Success`；
+  2. `am start -W` 输出含 `Status: ok`；
+  3. `screencap -p` 输出文件非空（`-s`）；
+  4. `pidof <包名>` 非空（没启动即闪退）；
+  5. logcat 无崩溃特征，正则 `FATAL EXCEPTION|Fatal signal|ANR in |E/AndroidRuntime|E AndroidRuntime`
+     —— 斜杠版和空格版**都要写**：`logcat -v time` 输出 `E/AndroidRuntime`，
+     默认的 threadtime 格式输出 `E AndroidRuntime`，只写一种会漏。
+     `ANR in` 后面带空格，避免匹配到 `ANR in` 之外的词。
+  判定前先 `adb logcat -c` 清缓冲，让崩溃窗口只覆盖「安装→启动→渲染」这段。
   截图只断言「画没画出来」——`-gpu swiftshader_indirect` 是软件光栅化，
   RenderEffect 模糊质感与真机 GPU 差异极大，**不能**当像素级视觉基线做 diff。
 - 前台 activity 只观测不判定（`dumpsys` 字段格式随版本变，硬断言会假失败）。
@@ -113,13 +139,16 @@ curl -sSL -o /dev/null -w '%{redirect_url}\n' \
 # 末尾 .../tag/v7 即最新大版本
 ```
 
-`api.github.com` 匿名配额只有 60/小时，很容易打满（403 + `x-ratelimit-remaining: 0`）。
-上面这种 `releases/latest` 重定向法更省。
+`api.github.com` 匿名配额只有 60/小时，很容易打满；上面这种 `releases/latest` 重定向法
+不占配额（配额细节见 `verification.md`）。
 
-本仓库当前用到的版本（2026-09 实测文件内容）：`actions/checkout@v7`、
-`actions/setup-java@v6`、`actions/download-artifact@v8`、`actions/upload-artifact@v7`、
-`actions/cache/restore@v6`、`actions/cache/save@v6`、`gradle/actions/setup-gradle@v6`、
-`softprops/action-gh-release@v3`、`reactivecircus/android-emulator-runner@v2`。
+本仓库三套 workflow 当前用到的版本（2026-09-02 实测文件内容）：
+`actions/checkout@v7`、`actions/setup-java@v6`、`actions/download-artifact@v8`、
+`actions/upload-artifact@v7`、`actions/cache/restore@v6`、`actions/cache/save@v6`、
+`gradle/actions/setup-gradle@v6`、`softprops/action-gh-release@v3`、
+`reactivecircus/android-emulator-runner@v2`；`dependency-review.yml` 另用
+`gradle/actions/dependency-submission@v6`（带 `gradle-version: '9.7.1'`，因为仓库没有
+wrapper jar）和 `actions/dependency-review-action@v5`。
 
 ## 未配 Secrets 时的产物语义
 
@@ -129,17 +158,12 @@ curl -sSL -o /dev/null -w '%{redirect_url}\n' \
 
 ## 版本号自动化（与 workflow 耦合）
 
-`app/build.gradle.kts` 不再手工递增版本号，优先级
-`VERSION_CODE`/`VERSION_NAME` 环境变量 > CI 派生值 > 本地兜底（`2` / `"1.0.2"`）：
-
-- `versionCode` 取 `GITHUB_RUN_NUMBER`，并与兜底值取 **`max`**——
-  `GITHUB_RUN_NUMBER` 只在单个 workflow 文件内递增，换 workflow 会从 1 重新计数，
-  直接取用会让 versionCode 倒退（Google Play 拒收）。重跑同一次 run 该值不变，可复现。
-- `versionName` 在 `GITHUB_REF_TYPE == "tag"` 时取 tag 名去掉前导 `v`，
-  所以发版只需打 tag，不必改文件。
+发版只需打 `v*` tag，不必改文件：`versionCode` 取 `GITHUB_RUN_NUMBER` 并与兜底值取
+`max`，`versionName` 在 `GITHUB_REF_TYPE == "tag"` 时取 tag 名去掉前导 `v`。
+完整取值优先级与「为什么必须取 max」的解释在 `stack-and-build.md`（构建脚本侧的主场）。
 
 ## 本地构建
 
 需自备 Gradle 9.x + Android SDK，或补交 `gradlew` 与 `gradle/wrapper/gradle-wrapper.jar`。
-本机无 JDK 时**不要**尝试本地构建，直接推分支让 CI 跑——但推送前必须确认环境有
-GitHub 凭证（PAT / ssh key），否则连 push 都做不到，也就无法触发 CI。
+环境里没有 JDK 时不要尝试本地构建，直接推分支让 CI 跑（前提：有 GitHub 凭证能 push）。
+这条判断的主场在 `verification.md`。

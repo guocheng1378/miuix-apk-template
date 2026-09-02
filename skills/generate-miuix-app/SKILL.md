@@ -1,11 +1,11 @@
 ---
 name: generate-miuix-app
 description: 从零生成或改造一个 MIUIX 风格的 Android APK 工程——Compose Multiplatform(KMP) + miuix 组件库，带悬浮液态玻璃底栏、miuix-nav 页面栈导航、大标题折叠 TopAppBar、下拉刷新、Coil3 图集、miuix-preference 设置页、主题跨重启持久化与 edge-to-edge，并配好 GitHub Actions 的 Release 构建、PKCS12 正式签名与签名校验兜底。当用户要求「生成 MIUIX 风格 app」「套壳 MIUIX」「用 miuix 搭 Android 界面」「液态玻璃/悬浮玻璃底栏」「miuix-nav 导航应用」「miuix 签名 APK 构建」，或要在已有 miuix-apk-template 仓库上派生新应用时使用。本 skill 只负责静态生成与自检，实际编译与签名在 GitHub Actions 完成。
-compatibility: 本机不需要 JDK / Android SDK / adb——编译、签名、产物校验全部在 GitHub Actions runner 上完成，本 skill 只做静态生成与 grep 级自检。scripts/gen-keystore.sh 与 scripts/preflight.sh 需要 bash + openssl；scripts/set-gh-secrets.py 需要 python3 + pynacl（建议装进 venv）。网络需可达 repo1.maven.org、dl.google.com、api.github.com、raw.githubusercontent.com。写 Secrets 或推 tag 触发 CI 需要 GitHub token。
 metadata:
   version: "1.0.0"
   upstream-miuix: "top.yukonga.miuix.kmp 0.9.4-rc01 (github.com/compose-miuix-ui/miuix)"
   template-repo: "https://github.com/guocheng1378/miuix-apk-template"
+  compatibility: 本机不需要 JDK / Android SDK / adb——编译、签名、产物校验全部在 GitHub Actions runner 上完成，本 skill 只做静态生成与 grep 级自检。scripts/gen-keystore.sh 与 scripts/preflight.sh 需要 bash + openssl；scripts/set-gh-secrets.py 需要 python3 + pynacl（建议装进 venv）；scripts/lint-skill.py 只需要 python3 标准库。网络需可达 repo1.maven.org、dl.google.com、api.github.com、raw.githubusercontent.com。写 Secrets 或推 tag 触发 CI 需要 GitHub token。
 ---
 
 # 生成 MIUIX 风格 APK 应用
@@ -31,10 +31,19 @@ metadata:
 |---|---|
 | 写/改 `build.gradle.kts`、`settings.gradle.kts`、`gradle.properties`、wrapper；版本选型 | `references/stack-and-build.md` |
 | 写 Compose 代码：miuix import 路径、真实签名、导航/blur/preference/theme 接线、液态玻璃组件 | `references/miuix-api.md` |
+| 大标题折叠不生效、`TopAppBar` 与 `PullToRefresh` 怎么联动 `ScrollBehavior`、`textureBlur` 传参类型不匹配 | `references/pitfalls.md` I 节（滚动接线）＋ A 节（编译期签名） |
 | 产出 keystore、配 Signing Secrets、无 JDK 环境补签名 | `references/signing-and-secrets.md` |
 | 写/修 `.github/workflows/build-apk.yml`，CI 报 403 / 0 jobs / 装不上的包 | `references/ci-workflow.md` |
-| 核验某个 API 或版本是否属实；交付前检测清单；本机没 JDK 时能做到哪一步 | `references/verification.md` |
+| 核验某个 API 或版本是否属实（**流程见上面「API 核对标准流程」**）；交付前检测清单；本机没 JDK 时能做到哪一步 | `references/verification.md` |
 | 撞上编译错误 / 依赖解析失败 / 文档与实际不符——**先查这里再动手** | `references/pitfalls.md` |
+| **做液态玻璃底栏**：不要照签名自己重写这 7 个组件，直接拷成品源码 | `assets/liquid/`（先读 `assets/liquid/README.md`） |
+
+**液态玻璃组件是资产、不是文档。** `assets/liquid/component/` 下 7 个 `.kt`
+（`liquid/` 5 个 + `animation/` 2 个）是可直接编译的成品源码，与模板仓库
+`shared/src/commonMain/kotlin/component/` 逐字节一致；`assets/liquid/snippets/` 两个
+`.kt.snippet` 是接线写法。**生成新工程时整目录原样拷过去**，只按 README 改包名，
+不要重新实现——`textureBlur`/`layerBackdrop`/`Highlight` 的真实参数组合和「一个 backdrop
+实例一个注册点」那条（不可协商项 12）都固化在这批源码里，手写极易踩 G1 那个首帧 SIGSEGV。
 
 已有参考实现（如本仓库）时**优先派生**：以它为基线改包名/应用名/主题色/页面，
 而不是从空白重写。从零生成时按 `stack-and-build.md` 的目录结构建。
@@ -71,7 +80,7 @@ metadata:
 | Kotlin | `2.4.10` |
 | Compose Multiplatform | `1.12.0` |
 | Android Gradle Plugin | `9.3.2` |
-| MIUIX | `0.9.4-rc01`（`miuix-ui` + `miuix-icons` + `miuix-blur` + `miuix-nav` + `miuix-preference` + `miuix-squircle`） |
+| MIUIX | `0.9.4-rc01`（`miuix-ui` + `miuix-icons` + `miuix-blur` + `miuix-nav` + `miuix-preference` + `miuix-squircle`；另有 `miuix-core` 由 `miuix-ui` 的 POM 以 `runtime` 传递带入，**不必显式声明**，但 `MiuixIcons` 壳对象在它里面，下 sources jar 核对时别漏——共 7 个模块） |
 | Coil | `3.6.1`（`coil-compose` 在 commonMain，`coil-network-okhttp` 在 androidMain） |
 | kotlinx-serialization | `1.11.0` |
 | androidx.activity-compose | `1.13.0` |
@@ -80,8 +89,68 @@ metadata:
 | JDK（CI） | `21`（Zulu） |
 | Gradle | `9.7.1`（`gradle/wrapper/gradle-wrapper.properties` 的 `distributionUrl`） |
 
-MIUIX **没有 GitHub Release**，发布只在 Maven Central——不要去 GitHub Releases 找版本。
-核实方法见 `references/verification.md`。
+MIUIX 的版本以 **Maven Central** 为准。miuix **有** GitHub Releases
+（`github.com/compose-miuix-ui/miuix/releases`），但 rc 版标了 `prerelease`，而
+`/releases/latest` 端点按定义排除 prerelease（实测只回 `v0.9.3`，不是 `v0.9.4-rc01`）——
+查版本用 `/releases` 或 `/tags`，别用 `/latest`。Release 页只当变更日志读，
+jar/aar 只在 Central。核实方法见下面「API 核对标准流程」。
+
+## API 核对标准流程（下 sources jar）
+
+**规则：任何 miuix 的函数签名、参数名、可空性、默认值、SDK 门槛，在写进代码或本 skill 的
+文档之前，都要用下面的流程实测一遍。不要凭记忆写，也不要照抄上一版文档——本 skill 就曾经
+把 `Scaffold` 的滚动接管写反过（见 `references/pitfalls.md` I 节）。**
+
+网络需可达 `repo1.maven.org`。`$V` 用版本矩阵里的 MIUIX 版本。
+
+```bash
+V=0.9.4-rc01
+BASE=https://repo1.maven.org/maven2/top/yukonga/miuix/kmp
+M=miuix-ui          # ui / icons / blur / nav / preference / squircle / core 都有 sources jar（实测 200）
+mkdir -p /tmp/mx && cd /tmp/mx
+curl -sSL -o $M.jar "$BASE/$M/$V/$M-$V-sources.jar" && unzip -qo $M.jar -d $M
+```
+
+**关键差异：`<module>-android-<ver>-sources.jar` 是超集。** 实测普通
+`$M-$V-sources.jar` 只含 `commonMain/` 与 `skikoMain/`；而 `$M-android-$V-sources.jar`
+**同时**含 `androidMain/`（如 `blur/internal/RenderEffectCompat.android.kt`）和
+`commonMain/`。所以**核对 Android 行为时直接下 `-android` 那个 jar 就够了**，不用下两个。
+AAR 坐标同理是 `$M-android-$V.aar`。
+
+核对签名（示例即 `pitfalls.md` I 节与 A 节的实证来源）。注意 sources jar 解出来的路径
+**没有** `kotlin/` 这一层，是 `commonMain/top/yukonga/miuix/kmp/basic/…`，所以用 `find` 定位
+比手写相对路径稳：
+
+```bash
+f=$(find . -name Scaffold.kt -path '*/basic/*'); grep -n "fun Scaffold" -A 14 "$f"
+t=$(find . -name TopAppBar.kt -path '*/basic/*'); sed -n '422,455p' "$t"   # interface ScrollBehavior 的成员
+grep -rn "ScrollBehavior" --include=*.kt .                                 # 全库只有 TopAppBar.kt / PullToRefresh.kt
+```
+
+核对 SDK 门槛（**不要**猜，AAR 里写着）：
+
+```bash
+M=miuix-blur        # 换模块再跑一遍：门槛是逐模块声明的
+curl -sSL -o $M.aar "$BASE/$M-android/$V/$M-android-$V.aar"
+unzip -p $M.aar META-INF/com/android/build/gradle/aar-metadata.properties   # → minCompileSdk=37
+unzip -p $M.aar AndroidManifest.xml | tr -c '[:print:]' '\n' | grep -o 'minSdkVersion="[0-9]*"'  # → 33（blur）
+```
+
+（`AndroidManifest.xml` 在 AAR 里是**二进制 XML**，直接 `grep` 读不出来，所以先
+`tr -c '[:print:]' '\n'` 把不可见字节换成换行。）
+
+`aar-metadata.properties` 的 `minCompileSdk` 是**硬失败**（AGP 直接拒绝构建），
+`AndroidManifest.xml` 的 `minSdkVersion` 靠 `tools:overrideLibrary` 可放行但运行期要降级分支——
+两者性质不同，别混为一谈。不可协商项 1、2 就是这么测出来的。
+实测 0.9.4-rc01 各模块：`minCompileSdk` **全部 37**；`minSdkVersion` 除 `miuix-blur` 是
+**33** 外，`ui`/`nav`/`preference` 均为 **24**（rc01 把下限从 23 抬到了 24，写在它的 release
+body 里）。所以「blur 需 33、其余需 24」——模板整体 `minSdk = 24` 只对非 blur 模块成立，
+blur 那条是靠 `overrideLibrary` 强过的。
+
+查版本/变更日志：`GET api.github.com/repos/compose-miuix-ui/miuix/releases`（**不是**
+`/releases/latest`，它排除 prerelease）。rc 版的 release body 里写了破坏性变更（如
+`minSdk 23→24`、`miuix-navigation3-ui` 移除换成 `miuix-nav`），升级前必读。
+写文档时只引「grep 得到的那一行」，行号连同文件名一起写，方便下一个人复核。
 
 ## 脚本
 

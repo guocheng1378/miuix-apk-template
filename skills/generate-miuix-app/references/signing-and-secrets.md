@@ -12,11 +12,8 @@
 | `KEY_ALIAS` | 条目别名 |
 | `KEY_PASSWORD` | 私钥口令（openssl 路径下与 keystore 口令相同） |
 
-> **Secret 名不等于 Gradle 侧变量名。** `build.gradle.kts` 的 `signingProp` 读的是
-> `KEYSTORE_PATH` / **`KEYSTORE_PASS`** / `KEY_ALIAS` / `KEY_PASSWORD`，
-> 其中 `KEYSTORE_PASS` 对应 Secret `KEYSTORE_PASSWORD`，`KEYSTORE_PATH` 根本不是 Secret
-> （workflow 直接写 `${{ github.workspace }}/keystore.p12`）。映射发生在 workflow 的 `env:` 块。
-> 改任何一侧不同步另一侧，表现就是「Secrets 明明配了却没签名」。详见 `ci-workflow.md`。
+> **Secret 名不等于 Gradle 侧变量名**（`KEYSTORE_PASSWORD` → `KEYSTORE_PASS`，
+> `KEYSTORE_PATH` 不是 Secret）。完整映射表在 `ci-workflow.md`，改任何一侧都要同步另一侧。
 
 ## 1. 用 openssl 产 PKCS12（替代 keytool）
 
@@ -25,6 +22,12 @@
 ```bash
 bash scripts/gen-keystore.sh --alias mykey --subject "/C=CN/O=myorg/CN=my-release" --outdir ./keystore
 ```
+
+参数与缺省值（实测脚本源码）：`--alias`（默认 `release`）、`--subject`
+（默认 `/C=CN/O=unknown/CN=android-release`）、`--days`（默认 `10950`）、
+`--outdir`（默认 `./keystore`）、`--password`。
+**不传 `--password` 时脚本用 `openssl rand -hex 16` 随机生成**并写进 `password.txt`，
+所以手工等价步骤里的 `<口令>` 要么自己定、要么去 `password.txt` 读。
 
 手工等价步骤：
 
@@ -36,8 +39,11 @@ openssl pkcs12 -export -inkey key.pem -in cert.pem -out release.p12 \
 base64 -w0 release.p12          # → SIGNING_KEY 的值
 ```
 
-脚本输出 `cert.pem` / `key.pem` / `release.p12` / `password.txt`，并把 base64 结果
-单独打印出来供直接粘进 Secrets。
+脚本输出 5 个文件：`cert.pem` / `key.pem` / `release.p12` / `password.txt` /
+**`alias.txt`**，并把 base64 结果单独打印到 stdout 供直接粘进 Secrets。
+`alias.txt` 是下一步脚本读 `KEY_ALIAS` 的来源，别漏。
+`-name` 决定 PKCS12 里的 alias，必须与 `KEY_ALIAS` 一致，否则 AGP 找不到条目——
+脚本末尾会用该口令 `openssl pkcs12 -info -noout` 自校验一次。
 
 > **走 PKCS12 时 `app/build.gradle.kts` 的 signingConfig 必须显式
 > `storeType = "PKCS12"`**，否则 AGP 按默认 JKS 读取会失败。这是本条路径唯一的额外代价。
@@ -56,8 +62,15 @@ base64 -w0 release.jks
 
 ```bash
 python3 scripts/set-gh-secrets.py --repo <owner>/<repo> --token-env GH_TOKEN \
-  --from-dir ./keystore --alias mykey
+  --from-dir ./keystore
 ```
+
+**脚本没有 `--alias` 参数**——别照记忆加一个，argparse 会直接报错退出。
+`--from-dir` 一次写四条 Secrets，取值全部来自 `gen-keystore.sh` 的输出目录：
+`SIGNING_KEY`（`release.p12` 的 base64）、`KEYSTORE_PASSWORD` 与 `KEY_PASSWORD`
+（都取 `password.txt`，openssl 路径下两者相同）、`KEY_ALIAS`（取 `alias.txt`，
+**文件缺失时缺省 `release`**）。单条写入用 `--set NAME=VALUE`（可重复，
+按第一个 `=` 切分）。`--token-env` 默认 `GH_TOKEN`。
 
 流程（脚本内部实现，理解它才能排错）：
 
@@ -78,9 +91,9 @@ python3 scripts/set-gh-secrets.py --repo <owner>/<repo> --token-env GH_TOKEN \
 
 ## 3. CI 里的签名校验兜底
 
-见 `ci-workflow.md`。核心是：产物文件名含 `unsigned` 就 `exit 1`，再用 runner 自带的
-`$ANDROID_HOME/build-tools/*/apksigner verify --verbose --print-certs` 打印证书指纹。
-这样「签名没生效」当场失败，而不是把装不上的包挂到 Release 页上。
+主场在 `ci-workflow.md`（build job 的 `Verify APK signature` 步骤）：产物文件名含
+`unsigned` 即 `exit 1`，再 `apksigner verify --print-certs` 打印证书指纹。
+效果是「Secrets 没生效」当场红，而不是把装不上的包挂到 Release 页上。
 
 ## 4. 备份与泄露面
 
@@ -93,9 +106,3 @@ python3 scripts/set-gh-secrets.py --repo <owner>/<repo> --token-env GH_TOKEN \
 - 本地开发把口令放 `local.properties`（`signingProp` 的回退路径），不要放
   `gradle.properties`——后者常被误提交。
 - 绝不回显用户提供的 token。PAT 一旦明文出现在对话里，交付后立即建议用户撤销。
-
-## 本仓库的实测产物
-
-`/root/.kimi-code/keystore/` 下已有 `cert.pem` / `key.pem` / `release.p12` / `password.txt`，
-就是上述 openssl 流程产出的。仓库 `git remote` 为
-`https://github.com/guocheng1378/miuix-apk-template.git`。
