@@ -182,9 +182,11 @@ blur 那条是靠 `overrideLibrary` 强过的。
 
 | 脚本 | 用途 | 依赖 |
 |---|---|---|
-| `scripts/preflight.sh` | 对目标仓库跑 grep 级静态自检，逐项 PASS/FAIL，任一 FAIL 退出码 1 | bash |
-| `scripts/gen-keystore.sh` | 无 JDK/keytool 时用 openssl 产 PKCS12 + base64 | bash + openssl |
-| `scripts/set-gh-secrets.py` | 用 GitHub API 加密写入 Signing Secrets | python3 + pynacl |
+| `scripts/derive-app.sh` | 从模板派生新工程：一次改完包名/应用名/工程名/偏好 key/目录路径，末尾自动跑 preflight | bash + git |
+| `scripts/preflight.sh` | 对目标仓库跑 grep 级静态自检，逐项 PASS/FAIL，任一 FAIL 退出码 1（位置参数 `$1` = 仓库根） | bash |
+| `scripts/gen-keystore.sh` | 无 JDK/keytool 时用 openssl 产 PKCS12 + base64（默认 alias `release`） | bash + openssl |
+| `scripts/set-gh-secrets.py` | 用 GitHub API 加密写入 Signing Secrets（`--from-dir` 一次写 4 条） | python3 + pynacl |
+| `scripts/lint-skill.py` | 检查 skill 自身：SKILL.md 元数据、references 链接、脚本表与真实参数是否对得上（`argv[1]` = **skill 目录**，不是仓库根） | python3 |
 
 交付前**必须**跑一次 `bash scripts/preflight.sh`。
 
