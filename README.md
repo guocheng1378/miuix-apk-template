@@ -163,16 +163,17 @@ git tag v0.1.0 && git push origin v0.1.0
 | 类别 | 处数 | 位置 |
 |---|---|---|
 | 目录路径（需 `git mv`） | 2 | `app/src/main/kotlin/top/yukonga/miuixapptemplate/`、`shared/src/commonMain/kotlin/top/yukonga/miuixapptemplate/` |
-| `namespace` | 2 | `app/build.gradle.kts`、`shared/build.gradle.kts` |
 | `package` 声明 | 5 | `MainActivity.kt`、`AndroidAppPrefs.kt`、`App.kt`、`AppPrefs.kt`、`Route.kt` |
-| 跨模块 `import` | 4 | `MainActivity.kt`、`App.kt` 等对 `top.yukonga.miuixapptemplate.*` 的引用 |
+| `namespace` | 2 | `app/build.gradle.kts:39`、`shared/build.gradle.kts:23`（**后者带 `.shared` 后缀**，不是同一个值） |
+| 跨模块 `import` | 4 | `shared/.../preview/Previews.kt:13-15`（3 条）、`preview/settings/SettingsPreviews.kt:6` |
 | `applicationId` | 1 | `app/build.gradle.kts` |
-| 应用名 | 1 | `app/src/main/res/values/strings.xml` 的 `app_name` |
-| 可见标题 | 1 | `strings.xml:2` 的 `<string name="app_name">MIUIX 模板</string>` 之外还有 `App.kt` 里的顶层大标题文案 |
+| workflow 的 `APP_ID` **定义** | 1 | `build-apk.yml:103`（该文件里 `APP_ID` 出现 8 次，另外 7 次都是 `$APP_ID` 引用，只需改定义这一行） |
+| 小计（纯文本替换） | **15** | |
+| 应用名字符串 | 1 | `strings.xml:2` 的 `<string name="app_name">MIUIX 模板</string>`——桌面标签与顶栏标题都取这一个值 |
 | 工程名 | 1 | `settings.gradle.kts:18` 的 `rootProject.name` |
 | 偏好存储 key | 1 | `AndroidAppPrefs.kt:12` 的 `getSharedPreferences("miuix_template_prefs")`（不改会和同设备其它 fork 抢存储） |
-| workflow | 1 | `build-apk.yml` 的 `APP_ID` 环境变量 |
-| skill 镜像 | 1 | `assets/workflow-build-apk.yml:118`（**只有保留 `skills/` 时才需要**） |
+| 小计（隐性身份项，grep 包名抓不到） | **18** | |
+| skill 的 workflow 镜像 | 1 | `assets/workflow-build-apk.yml:118`（**只有保留 `skills/` 时才需要**）→ **19** |
 
 3. 改完**必须**跑一次自检，退出码 0 才算干净：
 
