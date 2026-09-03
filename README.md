@@ -285,7 +285,7 @@ apksigner verify --verbose --print-certs app-release.apk # 证书摘要应等于
 | `test.yml` | PR + master push |
 | `dependency-review.yml` | PR + master push；`fail-on-severity: moderate` |
 
-- **最近一次三套全绿的 commit 是 `12b23fa`**（build#16 + test#11 + dep#11）。当前 HEAD `987724d` 只有 test#12 与 dep#12 绿，**build-apk 在 HEAD 上从未跑过**——因为它只认 tag，而 HEAD 之后没有新 tag。
+- **最近一次三套全绿的 commit 是 `12b23fa`**（build#16 + test#11 + dep#11）。此后每个提交（含 `987724d` 与之后的纯文档提交）都只有 test 与 dep 两条绿，**build-apk 一次没跑过**——因为它只认 tag，而 `v1.0.5` 之后没有新 tag。
 - **emulator 冒烟**：`adb install` + `am start MainActivity` + AOT 预热，抓 logcat 崩溃按**包名/pid 归属**过滤（本行包名 / 下一行 `Process: <pkg>` / tag 括号里的 pid 属于 `pidof` 结果），再验进程存活与截图非空白。`v1.0.4` 那轮首次真实抓到并修好了一个首帧 native 崩溃。残留盲区：native crash 的 `Fatal signal` 行既不带包名、pid 也随进程消失，按归属过滤会漏判——但那种情况 `pidof` 必然为空，「进程存活」检查会 FAIL，不会放走真闪退。
 - **JVM 截图回归**：Robolectric + layoutlib 渲染 `preview.settings` 包，产出 `SettingsPageLight` / `SettingsPageDark` 两张图。**只 record，不做 diff**（仓库无 golden 基线）。
 - **依赖审查**：GitHub Dependency Review Action 逐依赖比对。**只在 PR 上有比对对象**；fork PR 的 graph 提交会 403 跳过；**private 仓库未开 Advanced Security 时必红**。
@@ -322,7 +322,7 @@ apksigner verify --verbose --print-certs app-release.apk # 证书摘要应等于
 
 - **详情页 / 设置页新接线零自动化渲染覆盖**：冒烟从不点进子页（[仍未执行](#verify)）。
 - **截图回归无基线**：只 `--record`，不做 diff，回归靠人眼。
-- **构建/测试期依赖漏洞未处理**：GitHub 的 Dependabot 面板报过 47 条（1 critical / 19 high / 25 moderate / 2 low），全部是 Gradle 插件 / Robolectric 等**构建与测试期**传递依赖（netty、bouncycastle、jose4j 等），**不进 Release APK**（已解包核对：APK 只含 okhttp / coil / miuix / compose 等运行时依赖）。升级要动 Gradle / Kotlin / AGP 版本，会冲掉整套已验证矩阵，暂不动。⚠ 该数字**匿名核不到**（`GET /dependabot/alerts` 对未授权请求返回 401），以仓库 Security 面板为准。
+- **构建/测试期依赖漏洞未处理**：GitHub 报 **47 条（1 critical / 19 high / 25 moderate / 2 low）**。该数字已由 push 时 GitHub 服务端回显原文确认（`GitHub found 47 vulnerabilities on ...'s default branch (1 critical, 19 high, 25 moderate, 2 low)`），不只是文档转述；明细仍匿名核不到（`GET /dependabot/alerts` 对未授权请求返回 401），逐条以仓库 [Security 面板](https://github.com/guocheng1378/miuix-apk-template/security/dependabot) 为准。按面板归类，全部是 Gradle 插件 / Robolectric 等**构建与测试期**传递依赖（netty、bouncycastle、jose4j 等），**不进 Release APK**（已解包核对：APK 只含 okhttp / coil / miuix / compose 等运行时依赖）。升级要动 Gradle / Kotlin / AGP 版本，会冲掉整套已验证矩阵，暂不动。
 
 ### 环境性假红（不是代码缺陷）
 
